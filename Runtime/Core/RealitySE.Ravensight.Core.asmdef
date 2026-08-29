@@ -1,0 +1,14 @@
+{
+  "name": "RealitySE.Ravensight.Core",
+  "rootNamespace": "RealitySE",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": true
+}

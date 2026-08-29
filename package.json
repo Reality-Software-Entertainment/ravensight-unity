@@ -1,0 +1,33 @@
+{
+  "name": "com.realityse.ravensight",
+  "version": "0.1.0",
+  "displayName": "Ravensight Analytics",
+  "description": "Official Unity SDK for Ravensight player analytics (beta). Sessions, batched events, offline queue, server kill switch.",
+  "unity": "2021.3",
+  "license": "MIT",
+  "author": {
+    "name": "Reality Software Entertainment",
+    "url": "https://ravensight.io"
+  },
+  "documentationUrl": "https://ravensight.io/docs/",
+  "changelogUrl": "https://github.com/Reality-Software-Entertainment/ravensight-unity/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/Reality-Software-Entertainment/ravensight-unity/blob/main/LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Reality-Software-Entertainment/ravensight-unity.git"
+  },
+  "keywords": [
+    "ravensight",
+    "analytics",
+    "telemetry",
+    "gamedev",
+    "events"
+  ],
+  "samples": [
+    {
+      "displayName": "Quick Start",
+      "description": "One file tour of tracking, flushing, feedback and the privacy toggle.",
+      "path": "Samples~/QuickStart"
+    }
+  ]
+}
