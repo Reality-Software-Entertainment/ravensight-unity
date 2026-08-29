@@ -9,9 +9,9 @@ side kill switch, in one MonoBehaviour and no third party dependencies.
 * Docs: https://ravensight.io/docs/
 * Unity 2021.3 or newer
 
-## BETA notice
+## Verification status
 
-This package is a beta. The protocol logic in `Runtime/Core` is written and
+The protocol logic in `Runtime/Core` is written and
 reviewed against the live API contract, and it is deliberately free of any
 UnityEngine dependency so it can be tested on its own. It has **not** yet been
 verified inside the Unity Editor or in a player build.
