@@ -12,7 +12,7 @@ dependencies.
   player opt-out (`Ravensight.SetTrackingEnabled(false)`) and a reset
   (`Ravensight.ResetDeviceId()`), no tracking permission prompt needed. What
   your store label can say: https://ravensight.io/docs/#privacy-label
-* Unity 2021.3 or newer
+* Unity 2021.3 or newer declared; verified on Unity 6000.6.5f1 only
 
 ## Verification status
 
@@ -46,8 +46,10 @@ What has **not** been verified:
   30 minute session rules have run only in the engine free tests, never on a
   device. The same goes for a WebGL build in a browser, an IL2CPP build and
   Windows or Linux players.
-* Any Unity version other than 6000.6.5f1. `package.json` declares 2021.3 as
-  the minimum; that is the target, not a tested version.
+* Any Unity version other than 6000.6.5f1. `package.json` declares Unity
+  2021.3 as the minimum because the code uses nothing newer (the one 2022.1
+  API, in a Play Mode test, is behind a version check), but only 6000.6.5f1
+  has been run.
 * The live API from a player. The runs above used local servers.
 
 Please open an issue with anything you hit.
@@ -72,7 +74,7 @@ Or add it to `Packages/manifest.json` yourself:
 }
 ```
 
-To pin a version, append a release tag such as `#v0.2.0` to the URL once that
+To pin a version, append a release tag such as `#v0.2.1` to the URL once that
 tag exists.
 
 ## Quickstart

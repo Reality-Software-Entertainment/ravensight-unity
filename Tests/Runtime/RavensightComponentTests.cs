@@ -188,7 +188,9 @@ namespace RealitySE.Tests
             // A project that disallows plain HTTP (the default) makes
             // SendWebRequest throw for a non loopback http:// URL. The startup
             // check must still finish, as offline, rather than wait forever.
-#if UNITY_EDITOR
+            // Unity 2021.3 has no project switch for plain HTTP, so there the
+            // request is simply sent and fails to resolve, also as offline.
+#if UNITY_EDITOR && UNITY_2022_1_OR_NEWER
             UnityEditor.InsecureHttpOption saved = UnityEditor.PlayerSettings.insecureHttpOption;
             UnityEditor.PlayerSettings.insecureHttpOption = UnityEditor.InsecureHttpOption.NotAllowed;
 #endif
@@ -208,7 +210,7 @@ namespace RealitySE.Tests
             finally
             {
                 LogAssert.ignoreFailingMessages = false;
-#if UNITY_EDITOR
+#if UNITY_EDITOR && UNITY_2022_1_OR_NEWER
                 UnityEditor.PlayerSettings.insecureHttpOption = saved;
 #endif
             }

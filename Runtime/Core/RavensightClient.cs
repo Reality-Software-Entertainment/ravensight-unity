@@ -136,7 +136,7 @@ namespace RealitySE
     /// </summary>
     public sealed class RavensightClient
     {
-        public const string SdkVersion = "0.2.0";
+        public const string SdkVersion = "0.2.1";
         /// <summary>The bare host. "/api/v1" is appended by <see cref="NormalizeApiUrl"/>.</summary>
         public const string DefaultApiUrl = "https://api.ravensight.io";
         /// <summary>Server hard limit on POST /track/batch.</summary>
