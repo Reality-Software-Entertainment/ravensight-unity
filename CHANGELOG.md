@@ -61,7 +61,7 @@ so this minor version contains breaking changes.
   `RavensightPlayerPrefsStorage`; `RavensightClient.FeedbackCategories`;
   `RavensightClient.SdkVersion`.
 * An engine free xUnit suite in `Tests~/Core`, `Tools/test.sh`, and a CI
-  workflow that runs it with the compile check (56 tests passing in CI). The
+  workflow that runs it with the compile check (58 tests passing in CI). The
   Unity layer is still not compiled or run in the Unity Editor: see the
   README's verification status.
 * README sections on automatic events, startup outcome, levels and deaths

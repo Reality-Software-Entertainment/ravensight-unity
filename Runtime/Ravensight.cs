@@ -481,9 +481,10 @@ namespace RealitySE
         /// <summary>
         /// Submits player feedback. Category is one of bug, suggestion,
         /// complaint, praise, playtest, other (or null); rating is 0 for none
-        /// or 1 to 5. Throws RavensightException: "invalid_category",
-        /// "invalid_rating", "empty_message" and "disabled" are refused locally
-        /// with no request.
+        /// or 1 to 5. The returned task fails with RavensightException:
+        /// "invalid_category", "invalid_rating", "empty_message" and "disabled"
+        /// (also when the component has no client) are refused locally with no
+        /// request.
         /// </summary>
         public static Task SubmitFeedback(string message, string category, int rating)
         {
