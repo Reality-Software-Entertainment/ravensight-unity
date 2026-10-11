@@ -13,8 +13,9 @@ public sealed class RavensightQuickStart : MonoBehaviour
 
     private void Start()
     {
-        // Events queue immediately. They are sent once a session exists, so
-        // you never have to wait for the SDK to be ready before tracking.
+        // Events queue immediately. Calls made before the Ravensight component
+        // wakes are held and queued when it does, and everything is sent once
+        // a session exists, so you never wait for the SDK before tracking.
         Ravensight.Track("sample_scene_loaded");
 
         Ravensight.Track("level_started", new Dictionary<string, object>
@@ -44,7 +45,7 @@ public sealed class RavensightQuickStart : MonoBehaviour
     {
         try
         {
-            await Ravensight.SubmitFeedback(message, "gameplay", 4);
+            await Ravensight.SubmitFeedback(message, "suggestion", 4);
             Debug.Log("Thanks, feedback sent.");
         }
         catch (RavensightException e)
@@ -53,9 +54,15 @@ public sealed class RavensightQuickStart : MonoBehaviour
         }
     }
 
-    /// <summary>Wire this to a privacy toggle in your settings menu.</summary>
+    /// <summary>Wire this to a privacy toggle in your settings menu. Remembered across launches.</summary>
     public void OnAnalyticsToggled(bool allowed)
     {
-        Ravensight.SetEnabled(allowed);
+        Ravensight.SetTrackingEnabled(allowed);
+    }
+
+    /// <summary>Wire this to a "Forget me" button: a fresh random identity from now on.</summary>
+    public void OnForgetMe()
+    {
+        Ravensight.ResetDeviceId();
     }
 }

@@ -2,24 +2,35 @@
 
 Official Unity SDK for [Ravensight](https://ravensight.io) player analytics.
 
-Sessions, batched events, an offline queue, rate limit handling and a server
-side kill switch, in one MonoBehaviour and no third party dependencies.
+Sessions, batched events, an offline queue, rate limit handling, a saved player
+opt-out and the server side kill switch, in one MonoBehaviour and no third party
+dependencies.
 
-* API base: `https://api.ravensight.io/api/v1`
+* API base: `https://api.ravensight.io` (`/api/v1` is appended)
 * Docs: https://ravensight.io/docs/
-* Privacy: a random per-install device id, no advertising identifier, a local opt-out (`Ravensight.SetEnabled(false)`), no tracking permission prompt needed. What your store label can say: https://ravensight.io/docs/#privacy-label
+* Privacy: a random per-install device id, no advertising identifier, a saved
+  player opt-out (`Ravensight.SetTrackingEnabled(false)`) and a reset
+  (`Ravensight.ResetDeviceId()`), no tracking permission prompt needed. What
+  your store label can say: https://ravensight.io/docs/#privacy-label
 * Unity 2021.3 or newer
 
 ## Verification status
 
-The protocol logic in `Runtime/Core` is written and
-reviewed against the live API contract, and it is deliberately free of any
-UnityEngine dependency so it can be tested on its own. It has **not** yet been
-verified inside the Unity Editor or in a player build.
+The protocol logic in `Runtime/Core` is written and reviewed against the live
+API contract, and it is deliberately free of any UnityEngine dependency so it
+can be tested on its own. Version 0.2.0 adds an engine free test suite for it
+(see [Running the tests](#running-the-tests)).
 
-Treat it as pending in editor verification: read the code before you ship it in
-a release build, and please open an issue with anything you hit. The JavaScript
-and Godot SDKs speak the same protocol and are further along.
+What has **not** been verified:
+
+* The SDK has not been run inside the Unity Editor or in a player build, on any
+  platform.
+* The 0.2.0 test suite was written on a machine without the .NET SDK, so it had
+  not been run when 0.2.0 was written. The CI workflow runs it on every push;
+  treat a green CI run as its first verification.
+
+Read the code before you ship it in a release build, and please open an issue
+with anything you hit.
 
 ## Install
 
@@ -41,7 +52,8 @@ Or add it to `Packages/manifest.json` yourself:
 }
 ```
 
-To pin a version, append `#v0.1.0` to the URL.
+To pin a version, append a release tag such as `#v0.2.0` to the URL once that
+tag exists.
 
 ## Quickstart
 
@@ -49,8 +61,10 @@ To pin a version, append `#v0.1.0` to the URL.
 2. Add the **Ravensight Analytics** component to it.
 3. Paste your publishable ingest key (`gt_live_...`) into the Ingest Key field.
 
-That is the whole setup. The component survives scene loads, reads the server
-kill switch, opens a session and starts flushing on a timer.
+That is the whole setup. The component survives scene loads, queues
+`game_started`, reads the server kill switch, opens a session and starts
+flushing on a timer. In the Editor it sends nothing unless you turn on
+**Send From Editor** (see [Editor play mode](#editor-play-mode)).
 
 Then track from anywhere:
 
@@ -72,11 +86,17 @@ public class LevelController : MonoBehaviour
 }
 ```
 
+`Track` calls made before the component wakes (from another script's `Awake`,
+say) are held, up to 500, and queued when it wakes, after the player's saved
+choice has been read.
+
 Prefer to configure it in code instead of the Inspector? Call this once, before
 your first event:
 
 ```csharp
 Ravensight.Initialize("gt_live_your_key");
+// or start it switched off, and turn it on later with SetEnabled(true):
+Ravensight.Initialize("gt_live_your_key", false);
 ```
 
 ## API
@@ -85,11 +105,20 @@ Everything game code needs is static on `Ravensight`:
 
 | Call | What it does |
 | --- | --- |
-| `Ravensight.Track(name, data)` | Queues an event. `data` is optional. Returns false when tracking is off. |
-| `Ravensight.Flush()` | Sends queued events now. Returns a `Task<RavensightFlushResult>`. |
+| `Ravensight.Track(name, data)` | Queues an event. `data` is optional. Returns false when tracking is off. Never sends by itself, except that a full batch of 50 starts a flush. |
+| `Ravensight.Flush()` | Sends queued events now. Returns a `Task<RavensightFlushResult>`. After the key was refused it still makes one attempt. |
 | `Ravensight.SubmitFeedback(message, category, rating)` | Posts player feedback. Throws `RavensightException` on failure. |
-| `Ravensight.FetchSuggestions()` | EXPERIMENTAL. AI generated design suggestions for your game. |
-| `Ravensight.SetEnabled(bool)` | Local opt in and opt out for a privacy toggle. |
+| `Ravensight.FetchSuggestions()` | EXPERIMENTAL. AI generated design suggestions for your game. An empty list, with no request, while tracking is off. |
+| `Ravensight.SetTrackingEnabled(bool)` | The player's choice. Saved in `PlayerPrefs` at once and read on every launch. Callable before the component exists. |
+| `Ravensight.IsTrackingEnabled` | The player's saved choice, for the initial state of your toggle. |
+| `Ravensight.ResetDeviceId()` | Forgets this install's identity: a new random id, the queue cleared, the session dropped. Returns the new id. |
+| `Ravensight.SetEnabled(bool)` | The developer's runtime switch, not saved. For debug or server builds, not for a player toggle. |
+| `Ravensight.StatusReason` | Why events are not being sent, or null when ready. See [Startup outcome](#startup-outcome). |
+| `Ravensight.StatusChanged` | `event Action<string>`, raised with the new reason when it changes. |
+| `Ravensight.LastInitResult` | What the startup check found, or null until it has finished. |
+| `Ravensight.SessionToken` | The open session's token, null until one opens. See [Game servers](#game-servers-and-the-session-token). |
+| `Ravensight.IsPlaytest` | True when a Ravensight Playtest run launched this build. |
+| `Ravensight.SetPlaytestContext(token, runId)` | For builds that cannot read environment variables, such as mobile. Call before the component wakes. |
 | `Ravensight.IsReady` | True once a session exists. |
 | `Ravensight.Client` | The underlying `RavensightClient` for anything else. |
 
@@ -97,12 +126,18 @@ Event values can be strings, numbers, bools, nulls, nested dictionaries or
 lists. They are serialized by the SDK's own JSON writer, because Unity's
 `JsonUtility` cannot round trip a dictionary.
 
-Feedback, awaited from an async method:
+### Feedback
+
+The category is one of `RavensightClient.FeedbackCategories`: `bug`,
+`suggestion`, `complaint`, `praise`, `playtest`, `other`, or null for none. The
+rating is 0 for none, or 1 to 5. Anything else fails locally, with no request,
+as `invalid_category` or `invalid_rating`. While tracking is off it fails
+locally as `disabled`.
 
 ```csharp
 try
 {
-    await Ravensight.SubmitFeedback("The boss fight drags", "balance", 3);
+    await Ravensight.SubmitFeedback("The boss fight drags", "suggestion", 3);
 }
 catch (RavensightException e)
 {
@@ -114,98 +149,272 @@ catch (RavensightException e)
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| Api Url | `https://api.ravensight.io/api/v1` | Only change this if you self host. `/api/v1` is appended when omitted. |
+| Api Url | `https://api.ravensight.io` | Only change this if you self host. Whitespace, trailing slashes and a trailing `/api/v1` are stripped, then `/api/v1` is appended. Empty means the default. |
 | Ingest Key | none | Your publishable `gt_live_...` key. |
 | Game Version | empty | Empty uses `Application.version`. |
-| Auto Flush Seconds | `15` | `0` flushes only on demand. |
+| Auto Flush Seconds | `15` | Seconds between timer flushes. `0` flushes only on demand, on a full batch, on background and on quit. |
 | Max Queue Size | `500` | Offline queue cap. Oldest events are dropped first. |
 | Request Timeout Seconds | `15` | Per request timeout. |
-| Track Lifecycle Events | on | Sends `game_started`, `game_paused`, `game_resumed`, `game_exited`. |
-| Verbose Logging | off | Logs SDK activity to the console. |
+| Enabled On Start | on | The developer's start switch, not saved. Off means no request of any kind until `SetEnabled(true)`. |
+| Send From Editor | off | Send from play mode in the Unity Editor. |
+| Track Lifecycle Events | on | Sends `game_started` and `game_exited`. |
+| Track Pause Events | off | Also sends `game_paused` and `game_resumed`. |
+| Session Timeout Seconds | `1800` | iOS and Android: time in the background after which returning starts a new session. |
+| Verbose Logging | off | Logs SDK activity to the console. Warnings you need to act on are always logged. |
+
+## Automatic events
+
+With Track Lifecycle Events on, the SDK sends exactly two events of its own:
+
+* **`game_started`**, queued in `Awake` with the real start time, first in the
+  queue. The server kill switch is read before it is sent. Never queued while
+  the client is disabled or the player has opted out; if tracking is turned on
+  later in the run, it is queued then, once.
+* **`game_exited`**, queued once on the quit path. On desktop players the quit
+  is held for at most 1.5 seconds while the last batch is sent. Delivery is best
+  effort: a process that ends first can lose it. Desktop focus loss is not an
+  exit; it flushes and sends no event.
+
+`game_paused` and `game_resumed` are only sent when Track Pause Events is on.
+
+**iOS and Android.** Going to the background sends no event. The SDK records
+the time, flushes, and saves a small marker (`ravensight_bg` in `PlayerPrefs`).
+On returning:
+
+* after less than Session Timeout Seconds (30 minutes by default), nothing is
+  queued and the session carries on;
+* after 30 minutes or more, `game_exited` is sent under the old session with the
+  time the app left, the session ends, and `game_started` opens a new one.
+
+If the app was killed in the background (swiped away), the next launch finds
+the marker and, unless the player has opted out or the session has expired,
+sends that `game_exited` once before anything else. One attempt, then the
+marker is deleted whatever the answer.
+
+## Startup outcome
+
+`Ravensight.StatusReason` is null when the SDK is ready, otherwise one of these
+values. `Ravensight.StatusChanged` tells you when it changes.
+
+| Reason | Meaning |
+| --- | --- |
+| `disabled` | Switched off with Enabled On Start, `SetEnabled(false)` or Send From Editor, or the player opted out. |
+| `invalid_key` | The ingest key was refused (`401`, or a `403` other than the ones below). Automatic sending stops for the run, events stay queued, and `Flush()` makes one more attempt. Logged once as a warning. |
+| `tracking_disabled` | Tracking is switched off for this game on the server. The queue is cleared and nothing more is sent this run. Logged once. |
+| `offline` | No connection, a timeout or a server error. Events are kept and retried. |
+| `rate_limited` | The server asked the SDK to wait. Events are kept. |
+| `session_failed` | A session could not be opened, or a playtest token was refused or came without a run id. |
+| `playtest_job_closed` | The playtest job this run belongs to has finished. Sending stops for the run. |
+
+```csharp
+Ravensight.StatusChanged += reason =>
+{
+    if (reason == "invalid_key") Debug.LogError("Check the Ravensight ingest key.");
+};
+```
 
 ## About your ingest key
 
 The `gt_live_...` key is publishable. It is safe to ship inside a build: it can
-only open sessions and read the tracking kill switch. It cannot read analytics,
-read feedback or touch your account. Rotate it from the dashboard at any time.
+open sessions, read the tracking kill switch and read this game's design
+suggestions. It cannot read analytics, read feedback or touch your account.
+Rotate it from the dashboard at any time.
 
 ## How delivery works
 
-* **Batching.** Up to 50 events per request, the server hard limit. A flush
-  keeps sending batches until the queue drains.
+* **Batching.** Up to 50 events per request, the server hard limit. `Track`
+  only queues; a send happens on the timer, as soon as 50 are queued, on
+  `Flush()`, on background and on quit. A flush keeps sending batches until the
+  queue drains.
 * **Offline queue.** Events accumulate up to Max Queue Size. Past that the
-  oldest are dropped so the newest are always kept.
-* **Never dropped on failure.** Events leave the queue only after the server
-  answers `202`.
-* **Session expiry.** A `401` clears the session, opens a new one and re sends
-  the same batch.
-* **Rate limits.** A `429` honors `Retry-After` in seconds. With no such header
-  the SDK backs off exponentially from 10 seconds to a 5 minute ceiling. The
-  queue is held, never discarded.
-* **Oversize batches.** A `400` halves the batch and retries down to a single
-  event. An event still rejected on its own is dropped so it cannot block
-  everything behind it.
-* **Kill switch.** `GET /settings` is read once at boot. If the server has
-  tracking off for your game, the queue is cleared and nothing is sent.
+  oldest are dropped so the newest are always kept. The queue lives in memory.
+* **Never dropped on a network failure.** Events leave the queue only after the
+  server answers `202`.
+* **Session expiry.** A `401` on a batch clears the session, opens a new one and
+  re sends the same batch, at most twice in a row, then backs off.
+* **Rate limits.** A `429` waits exactly `Retry-After` seconds, and so does a
+  `503` that carries one. With no such header the SDK backs off exponentially
+  from 10 seconds to a 5 minute ceiling. The queue is held.
+* **Rejected events.** A `400` halves the batch and retries down to a single
+  event. An event still rejected on its own is dropped, counted in
+  `Stats.Dropped` and logged once, so it cannot block everything behind it.
+* **Kill switch.** `GET /settings` is read at boot, before any batch is sent
+  (the one exception is the saved exit of an app killed in the background,
+  described above). A `403 tracking_disabled` from any request has the same
+  effect.
+* **Nothing while off.** While the client is disabled, the player has opted
+  out, the server has switched tracking off or the run is stopped, the SDK makes
+  no request of any kind.
 
-Flushes happen on the timer, on `OnApplicationPause`, on focus loss and on
-`OnApplicationQuit`. The quit flush is best effort: Unity has no synchronous
-HTTP, so a process that exits immediately can lose the last batch. Anything not
-delivered is gone, since the queue lives in memory only.
+## Levels and deaths
 
-## Architecture
+The dashboard's level funnel, per-level deaths and journeys read your event
+names and the place fields `level`, `location` and `track`. To say exactly what
+an event is, set `rs_kind` in its data to `level_start`, `level_complete`,
+`death` or `none` (`none` opts an event out of the name match). Keys that start
+with `rs_` are reserved for Ravensight.
 
+```csharp
+Ravensight.Track("checkpoint_reached", new Dictionary<string, object>
+{
+    { "level", "forest_2" },
+    { "rs_kind", "level_complete" },
+});
 ```
-Runtime/
-  Core/                         no UnityEngine dependency, enforced by asmdef
-    RavensightClient.cs         sessions, batching, backoff, the whole protocol
-    RavensightTransport.cs      IRavensightTransport plus request and response
-    RavensightJson.cs           small JSON reader and writer
-  Ravensight.cs                 MonoBehaviour singleton, PlayerPrefs, timers
-  RavensightUnityTransport.cs   IRavensightTransport over UnityWebRequest
-```
 
-`Runtime/Core` is its own assembly with `noEngineReferences` set, so a stray
-`using UnityEngine` in the protocol layer is a compile error rather than a
-surprise. That is what makes the logic testable without the editor: hand
-`RavensightClient` a fake `IRavensightTransport` and a fake clock and you can
-drive every retry path in a plain unit test.
-
-Compile check the engine free half from a terminal, if you have the .NET SDK or
-Mono installed:
-
-```bash
-Tools/compile-check.sh
-```
+The full rules are at https://ravensight.io/docs/#detection-rules.
 
 ## Device id and privacy
 
-The SDK generates a random device id on first run and stores it in
+The SDK generates a random device id on first run (`dev_` plus 32 hex
+characters from the platform's secure random generator) and stores it in
 `PlayerPrefs` under `ravensight_device_id`. No hardware identifier, advertising
 id, IP based fingerprint or personal data is collected by the SDK itself. Only
 the events you choose to send leave the device.
 
-`Ravensight.SetEnabled(false)` stops all sending and discards anything still
-queued, so an opt out does not leave player data sitting in memory.
+The player's choice is stored by the SDK under `ravensight_tracking_enabled`.
+`Ravensight.SetTrackingEnabled(false)` saves it at once, discards anything still
+queued and stops all requests. It is read again on every launch, before
+anything is sent, and it wins over Enabled On Start. You can call it before
+the component exists.
 
-The opt-out is not stored by the SDK: keep the player's choice in your own
-settings and call `Ravensight.SetEnabled(false)` before the first event on every
-launch. To forget this install's analytics identity, delete the `ravensight_device_id` key from `PlayerPrefs`;
-the next run starts under a fresh id and nothing links the old one back.
+```csharp
+Ravensight.SetTrackingEnabled(false);        // the player opted out, remembered
+string newId = Ravensight.ResetDeviceId();   // forget this install's identity
+```
+
+`ResetDeviceId` saves a new random id, clears the queue and drops the session,
+so nothing links the old id to the new one.
 
 A game that sends gameplay events and nothing else can declare Device ID and
 Product Interaction as not linked to the player and not used for tracking,
 and needs no tracking permission prompt. The row by row answers for the App
 Store and Google Play forms are at https://ravensight.io/docs/#privacy-label.
 
+## Telling players
+
+You do not need a permission prompt, but saying what the game sends is good
+manners. A paragraph your game can show, in a settings screen or on its
+store page:
+
+> This game sends anonymous gameplay events (what happens in the game, never
+> who you are) to Ravensight so we can improve it. You can turn this off in
+> Settings at any time.
+
+And the toggle behind "turn this off":
+
+```csharp
+// an "Analytics" switch in your settings screen
+public void SetAnalytics(bool on)
+{
+    Ravensight.SetTrackingEnabled(on);   // remembered across launches
+}
+
+// a "Forget me" button: a fresh random identity from now on
+public void ForgetMe()
+{
+    Ravensight.ResetDeviceId();
+}
+```
+
+Use `Ravensight.IsTrackingEnabled` for the switch's initial state.
+
+## Editor play mode
+
+Pressing Play in the Editor sends nothing by default, so your test sessions do
+not show up as players. Turn on **Send From Editor** on the component to send
+from play mode. While it is off, `SetEnabled(true)` does nothing in the Editor.
+Player builds are not affected.
+
+## Playtest
+
+When a Ravensight Playtest run launches a desktop build, the SDK picks up the
+run from the first of: `Ravensight.SetPlaytestContext(token, runId)`, the
+environment variables `RAVENSIGHT_PLAYTEST_TOKEN` and
+`RAVENSIGHT_PLAYTEST_RUN_ID`, or the command line arguments
+`--ravensight-playtest-token=` and `--ravensight-playtest-run-id=`. During a run:
+
+* the device id is `pt-<runId>`, kept in memory; the saved id is never read or
+  written, and nothing else is written to `PlayerPrefs`;
+* every request carries the `X-Ravensight-Playtest` header, and events are
+  tagged as synthetic;
+* the player's saved opt-out is ignored, and `SetTrackingEnabled` and
+  `ResetDeviceId` do nothing but log one line;
+* when the job closes (`403 playtest_job_closed`) or the token is refused,
+  sending stops for the run.
+
+A token without a run id never runs as a real player: the SDK stops with
+`session_failed` and logs once.
+
+## Game servers and the session token
+
+`Ravensight.SessionToken` (the same value as `Ravensight.Client.SessionToken`)
+is the open session's token, null until a session opens. Send it to your game
+server, which can pass it on as `joinToken`. A headless server build that uses
+this SDK creates its own client with the token as `JoinToken`; the first
+session it opens sends it as `joinToken` alongside the device id. If the
+server answers `401 invalid_join_token`, the client opens a plain session
+instead.
+
+```csharp
+var config = new RavensightConfig
+{
+    IngestKey = "gt_live_your_key",
+    DeviceId = playerDeviceId,
+    JoinToken = tokenFromThePlayer,
+    Storage = new RavensightMemoryStorage(),
+};
+var client = new RavensightClient(config, new RavensightUnityTransport(this), null);
+client.Begin();
+await client.InitAsync();
+```
+
+The SDK never computes a session id on the client.
+
 ## WebGL
 
-WebGL builds work, with two caveats:
+WebGL builds should work, with two caveats (not yet verified in a browser):
 
 * `PlayerPrefs` is backed by IndexedDB and some browsers clear it aggressively,
   so returning players may look new.
-* `OnApplicationQuit` is unreliable in a browser tab. Flush at points you
-  control, such as the end of a level, rather than relying on quit.
+* Quit is unreliable in a browser tab. Flush at points you control, such as the
+  end of a level, rather than relying on quit.
+
+## Architecture
+
+```
+Runtime/
+  Core/                           no UnityEngine dependency, enforced by asmdef
+    RavensightClient.cs           sessions, batching, backoff, opt-out, lifecycle
+    RavensightPlaytest.cs         where a playtest run's token and run id come from
+    RavensightStorage.cs          IRavensightStorage plus an in memory version
+    RavensightTransport.cs        IRavensightTransport plus request and response
+    RavensightJson.cs             small JSON reader and writer
+  Ravensight.cs                   MonoBehaviour singleton, timers, app lifecycle
+  RavensightPlayerPrefsStorage.cs IRavensightStorage over PlayerPrefs
+  RavensightUnityTransport.cs     IRavensightTransport over UnityWebRequest
+Tests~/Core/                      engine free tests, ignored by the Unity Editor
+```
+
+`Runtime/Core` is its own assembly with `noEngineReferences` set, so a stray
+`using UnityEngine` in the protocol layer is a compile error rather than a
+surprise. That is what makes the logic testable without the Editor.
+
+## Running the tests
+
+The tests drive `RavensightClient` with a fake transport, a fake clock and in
+memory storage. They need the .NET 8 SDK, not Unity:
+
+```bash
+Tools/test.sh                 # dotnet test "Tests~/Core"
+Tools/compile-check.sh        # compiles Runtime/Core as C# 7.3 for netstandard2.0
+```
+
+The folder is `Tests~` because the Unity Editor ignores folders whose name ends
+in `~`, so the test project never lands in your game. CI
+(`.github/workflows/ci.yml`) runs both on every push. As noted under
+[Verification status](#verification-status), they were not run on the machine
+0.2.0 was written on.
 
 ## License
 
