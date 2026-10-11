@@ -25,9 +25,12 @@ What has **not** been verified:
 
 * The SDK has not been run inside the Unity Editor or in a player build, on any
   platform.
-* The 0.2.0 test suite was written on a machine without the .NET SDK, so it had
-  not been run when 0.2.0 was written. The CI workflow runs it on every push;
-  treat a green CI run as its first verification.
+* The engine free tests cover `Runtime/Core` only. They passed in CI (GitHub
+  Actions, `ubuntu-latest`, .NET SDK 10.0.401 building the `net8.0` test
+  project: 56 passed, 0 failed), together with the C# 7.3 compile check of
+  `Runtime/Core`. The MonoBehaviour layer (`Ravensight.cs`, the PlayerPrefs
+  storage, the UnityWebRequest transport) is compiled only by Unity and has
+  not been compiled yet.
 
 Read the code before you ship it in a release build, and please open an issue
 with anything you hit.
@@ -412,9 +415,7 @@ Tools/compile-check.sh        # compiles Runtime/Core as C# 7.3 for netstandard2
 
 The folder is `Tests~` because the Unity Editor ignores folders whose name ends
 in `~`, so the test project never lands in your game. CI
-(`.github/workflows/ci.yml`) runs both on every push. As noted under
-[Verification status](#verification-status), they were not run on the machine
-0.2.0 was written on.
+(`.github/workflows/ci.yml`) runs both on every push.
 
 ## License
 
