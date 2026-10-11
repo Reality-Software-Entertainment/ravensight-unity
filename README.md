@@ -77,6 +77,27 @@ Or add it to `Packages/manifest.json` yourself:
 To pin a version, append a release tag such as `#v0.2.1` to the URL once that
 tag exists.
 
+**Upgrading from a copied 0.2.0.** If you followed the 0.2.0 workaround and
+copied this repository into `Packages/` (or `Runtime/` into `Assets/`), Unity
+gave those files random local GUIDs. The `.meta` files shipped from 0.2.1 use
+different ones, so after you switch to the git URL, or copy 0.2.1 over the
+old files, every scene or prefab holding the Ravensight component shows
+"Missing (Mono Script)" and the SDK no longer starts, with no error from the
+SDK itself. Do one of these:
+
+* Keep your GUID. If you stay on a copy, overwrite only the `.cs` files and
+  keep your own `.meta` files. If you move to the git URL, note the `guid:` in
+  your old `Runtime/Ravensight.cs.meta` first, then replace it with the
+  package's (`6ccf49fe13fb64dd283edfe488f55079`) in each scene and prefab
+  that uses the component (text search, with Asset Serialization set to Force
+  Text).
+* Or re-add the component. After switching, add **Ravensight Analytics** to its
+  GameObject again and fill in its Inspector fields (the ingest key and any
+  setting you changed).
+
+When moving to the git URL, delete the old copy so the package is not
+imported twice.
+
 ## Quickstart
 
 1. Create an empty GameObject in your first scene, name it `Ravensight`.
