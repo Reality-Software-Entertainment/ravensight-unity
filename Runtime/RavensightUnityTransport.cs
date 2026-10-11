@@ -41,7 +41,7 @@ namespace RealitySE
                 return completion.Task;
             }
 
-            if (_runner == null || !_runner.isActiveAndEnabled)
+            if (_runner == null || !_runner.gameObject.activeInHierarchy)
             {
                 // The singleton is gone (scene teardown or application quit).
                 completion.TrySetResult(RavensightResponse.NetworkFailure("transport runner unavailable"));

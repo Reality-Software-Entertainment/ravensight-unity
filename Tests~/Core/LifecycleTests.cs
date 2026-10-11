@@ -167,5 +167,27 @@ namespace RealitySE.Tests
             Assert.Empty(optedOut.Transport.Requests);
             Assert.Null(optedOut.Storage.GetString(RavensightClient.BackgroundMarkerKey));
         }
+    
+
+        [Fact]
+        public async Task BootIssuesItsRequestsInOrderOnTheFirstPump()
+        {
+            Harness h = new Harness();
+            h.Storage.SetString(RavensightClient.BackgroundMarkerKey,
+                "{\"sessionToken\":\"old_tok\",\"expiresAt\":" + (h.Clock.NowMs / 1000 + 3600) + ",\"backgroundedAt\":1759990000}");
+            RavensightClient client = h.Client();
+            client.Begin();
+            Assert.Empty(h.Transport.Requests); // construction and Begin touch no network
+
+            RavensightInitResult init = await client.InitAsync();
+
+            Assert.Equal(
+                new[] { "/track/batch", "/settings", "/session", "/track/batch" },
+                h.Transport.Requests.Select(FakeTransport.PathOf));
+            Assert.Equal("old_tok", h.Transport.Requests[0].Headers["X-Session-Token"]);
+            Assert.Equal("game_started", FakeTransport.EventsOf(h.Transport.Requests[3]).Single()["event"]);
+            Assert.True(init.SessionReady);
+            Assert.Null(init.Reason);
+        }
     }
 }

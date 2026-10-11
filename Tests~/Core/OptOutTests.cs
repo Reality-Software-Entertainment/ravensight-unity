@@ -187,5 +187,25 @@ namespace RealitySE.Tests
             Assert.Equal("dev_LEGACY-format", second.DeviceId);
             Assert.Equal("dev_LEGACY-format", legacy.Storage.GetString(RavensightClient.DeviceIdKey));
         }
+    
+
+        [Fact]
+        public async Task HoldDisabledCannotBeLiftedByEnabled()
+        {
+            Harness h = new Harness();
+            RavensightConfig config = h.Config();
+            config.HoldDisabled = true;
+            RavensightClient client = h.Client(config);
+            client.Begin();
+
+            client.Enabled = true;
+            await client.InitAsync();
+            client.Track("x");
+            await client.FlushAsync();
+
+            Assert.False(client.Enabled);
+            Assert.Empty(h.Transport.Requests);
+            Assert.Single(h.Warnings);
+        }
     }
 }

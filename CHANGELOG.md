@@ -87,6 +87,21 @@ so this minor version contains breaking changes.
   never rewritten.
 * The README and sample feedback examples used categories the server rejects;
   they now use `suggestion`.
+* The startup requests now go out from `Start` rather than `Awake`, where the
+  transport's runner was not yet enabled and every boot request failed at once.
+  The transport now only needs the runner's GameObject to be active.
+* The desktop quit hold waits for the queue to empty (or 1.5 seconds), so a
+  timer flush already in flight no longer ends the hold early.
+* The Editor hold also applies when `Ravensight.Client.Enabled` is set directly.
+* `Ravensight.SubmitFeedback` before the component exists returns a failed task
+  (`disabled`) instead of throwing synchronously.
+
+### Known gap
+
+* The package ships without Unity `.meta` files, so an install by git URL or
+  from a registry imports nothing. Before 0.2.0 is announced, the owner must
+  open the package once in a Unity Editor and commit the generated `.meta`
+  files.
 
 ## [0.1.0] - 2026-08-28
 

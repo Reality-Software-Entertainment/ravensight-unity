@@ -78,6 +78,12 @@ namespace RealitySE
         /// The player's own choice is <see cref="RavensightClient.SetTrackingEnabled"/>.
         /// </summary>
         public bool Enabled = true;
+        /// <summary>
+        /// Keeps the client disabled whatever <see cref="RavensightClient.Enabled"/>
+        /// is later set to. The Unity layer sets it in Editor play mode while
+        /// Send From Editor is off.
+        /// </summary>
+        public bool HoldDisabled;
         /// <summary>Queue game_started and game_exited automatically.</summary>
         public bool TrackLifecycleEvents = true;
         /// <summary>Background time, in seconds, after which a return to the foreground starts a new session.</summary>
@@ -227,7 +233,7 @@ namespace RealitySE
 
             ApiUrl = NormalizeApiUrl(config.ApiUrl);
             TrackingEnabled = true;
-            _enabled = config.Enabled;
+            _enabled = config.Enabled && !config.HoldDisabled;
             _joinToken = string.IsNullOrEmpty(config.JoinToken) || config.JoinToken.Trim().Length == 0
                 ? null
                 : config.JoinToken.Trim();
@@ -360,6 +366,11 @@ namespace RealitySE
             get { return _enabled; }
             set
             {
+                if (value && _config.HoldDisabled)
+                {
+                    WarnOnce("hold", "Ravensight: sending is held off here (Send From Editor is off), so enabling does nothing.");
+                    return;
+                }
                 if (value == _enabled) return;
                 _enabled = value;
                 if (!value) ClearQueue();

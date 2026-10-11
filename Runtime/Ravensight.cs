@@ -59,7 +59,9 @@ namespace RealitySE
         [SerializeField] private bool enabledOnStart = true;
 
         [Tooltip("Send from play mode in the Unity Editor. Off by default so pressing Play does not create player sessions.")]
+#pragma warning disable 0414 // read only in the Editor; player builds never use it
         [SerializeField] private bool sendFromEditor = false;
+#pragma warning restore 0414
 
         [Tooltip("Automatically track game_started and game_exited.")]
         [SerializeField] private bool trackLifecycleEvents = true;
@@ -276,6 +278,7 @@ namespace RealitySE
             config.Platform = Application.platform.ToString();
             config.MaxQueueSize = maxQueueSize;
             config.Enabled = startEnabled;
+            config.HoldDisabled = _editorHold;
             config.TrackLifecycleEvents = trackLifecycleEvents;
             config.SessionTimeoutSeconds = sessionTimeoutSeconds;
             config.Playtest = ResolvePlaytest();
@@ -310,8 +313,14 @@ namespace RealitySE
             // player is opted out or the client is disabled.
             _client.Begin();
             ReplayPendingEvents();
+        }
 
-            if (_client.IsActive) Boot();
+        private void Start()
+        {
+            // Not from Awake: the transport's coroutine runner is only usable
+            // once the component is fully enabled, so the startup requests
+            // (the saved exit, GET /settings, POST /session) go out from here.
+            if (_client != null && _client.IsActive) Boot();
         }
 
         private async void Boot()
@@ -397,9 +406,12 @@ namespace RealitySE
 
         private IEnumerator FlushThenQuit()
         {
-            Task<RavensightFlushResult> flush = _client.FlushAsync();
+            // A timer flush may already be in flight, in which case this one
+            // is skipped; that drain picks up game_exited, so wait on the
+            // queue rather than on this task.
+            Observe(_client.FlushAsync());
             float deadline = Time.realtimeSinceStartup + QuitHoldSeconds;
-            while (!flush.IsCompleted && Time.realtimeSinceStartup < deadline) yield return null;
+            while (_client.QueueCount > 0 && _client.IsActive && Time.realtimeSinceStartup < deadline) yield return null;
             Application.Quit();
         }
 
@@ -478,7 +490,10 @@ namespace RealitySE
             RavensightClient client = Client;
             if (client == null)
             {
-                throw new RavensightException("Ravensight is not initialized", "not_initialized", 0);
+                // Same shape as a disabled client: a failed task, no request.
+                TaskCompletionSource<bool> refused = new TaskCompletionSource<bool>();
+                refused.SetException(new RavensightException("Ravensight is not running", RavensightReason.Disabled, 0));
+                return refused.Task;
             }
             return client.SubmitFeedbackAsync(message, category, rating);
         }
@@ -514,11 +529,7 @@ namespace RealitySE
                 if (instance == null) _pendingEnabled = enabled;
                 return;
             }
-            if (enabled && instance._editorHold)
-            {
-                Debug.Log("Ravensight: Send From Editor is off, so SetEnabled(true) does nothing in play mode.");
-                return;
-            }
+            // The Editor hold (Send From Editor off) is enforced by the client.
             client.Enabled = enabled;
         }
 
