@@ -257,14 +257,14 @@ namespace RealitySE
                 return;
             }
 
-            bool enabled = _pendingEnabled.HasValue ? _pendingEnabled.Value : enabledOnStart;
+            bool startEnabled = _pendingEnabled.HasValue ? _pendingEnabled.Value : enabledOnStart;
             _pendingEnabled = null;
             _editorHold = false;
 #if UNITY_EDITOR
             if (!sendFromEditor)
             {
                 _editorHold = true;
-                enabled = false;
+                startEnabled = false;
                 Debug.Log("Ravensight: Send From Editor is off, so nothing is sent from play mode.");
             }
 #endif
@@ -275,7 +275,7 @@ namespace RealitySE
             config.GameVersion = string.IsNullOrEmpty(gameVersion) ? Application.version : gameVersion;
             config.Platform = Application.platform.ToString();
             config.MaxQueueSize = maxQueueSize;
-            config.Enabled = enabled;
+            config.Enabled = startEnabled;
             config.TrackLifecycleEvents = trackLifecycleEvents;
             config.SessionTimeoutSeconds = sessionTimeoutSeconds;
             config.Playtest = ResolvePlaytest();
