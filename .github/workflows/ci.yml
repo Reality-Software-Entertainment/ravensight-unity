@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  core:
+    name: Core compile check and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Compile Runtime/Core as C# 7.3 for netstandard2.0
+        run: bash Tools/compile-check.sh
+      - name: Run the Core tests
+        run: bash Tools/test.sh

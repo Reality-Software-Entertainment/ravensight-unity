@@ -6,3 +6,7 @@ Library/
 Temp/
 obj/
 Logs/
+
+# The test project is tracked; Unity generated project files are not.
+!Tests~/Core/*.csproj
+bin/
