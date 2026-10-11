@@ -63,9 +63,13 @@ namespace RealitySE
         private IEnumerator Run(RavensightRequest request, TaskCompletionSource<RavensightResponse> completion)
         {
             UnityWebRequest www = null;
+            UnityWebRequestAsyncOperation sending = null;
 
-            // Construction can throw (bad URL, bad header). Do it outside the
-            // yield, because C# forbids yield inside a try that has a catch.
+            // Construction and SendWebRequest can throw (a bad URL or header,
+            // or plain HTTP to a non loopback host when the project disallows
+            // it). Do both outside the yield, because C# forbids yield inside a
+            // try that has a catch; an exception escaping the coroutine would
+            // leave the task, and the client awaiting it, waiting forever.
             try
             {
                 www = new UnityWebRequest(request.Url, request.Method);
@@ -85,6 +89,7 @@ namespace RealitySE
                 }
 
                 www.timeout = _timeoutSeconds;
+                sending = www.SendWebRequest();
             }
             catch (Exception e)
             {
@@ -93,7 +98,7 @@ namespace RealitySE
                 yield break;
             }
 
-            yield return www.SendWebRequest();
+            yield return sending;
 
             RavensightResponse response;
             try

@@ -95,6 +95,13 @@ namespace RealitySE
         private static bool? _pendingEnabled;
         private static RavensightPlaytestContext _explicitPlaytest;
 
+        // Seams for the package's Play Mode tests (InternalsVisibleTo), so a
+        // test can boot the real component over a fake transport and in
+        // memory storage. Null in a game, which gets UnityWebRequest and
+        // PlayerPrefs.
+        internal static Func<MonoBehaviour, int, IRavensightTransport> TransportFactoryForTests;
+        internal static IRavensightStorage StorageForTests;
+
         /// <summary>The live singleton, or null before one exists.</summary>
         public static Ravensight Instance { get; private set; }
 
@@ -282,11 +289,14 @@ namespace RealitySE
             config.TrackLifecycleEvents = trackLifecycleEvents;
             config.SessionTimeoutSeconds = sessionTimeoutSeconds;
             config.Playtest = ResolvePlaytest();
-            config.Storage = new RavensightPlayerPrefsStorage();
+            config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
 
             try
             {
-                _client = new RavensightClient(config, new RavensightUnityTransport(this, requestTimeoutSeconds), null);
+                IRavensightTransport transport = TransportFactoryForTests != null
+                    ? TransportFactoryForTests(this, requestTimeoutSeconds)
+                    : new RavensightUnityTransport(this, requestTimeoutSeconds);
+                _client = new RavensightClient(config, transport, null);
             }
             catch (Exception e)
             {
