@@ -1,9 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Engine free tests for Runtime/Core. The folder name ends in "~" so the
-    Unity Editor ignores it; run with Tools/test.sh or
-    dotnet test "Tests~/Core".
+    Engine free tests for Runtime/Core, run on .NET with xUnit. The sources
+    live in Tests/Editor/Core so the Unity Editor runs the same files through
+    its own test runner (Tests/Editor/XunitShim.cs maps the xUnit calls onto
+    NUnit there). This folder name ends in "~", so Unity ignores the project
+    file itself. Run with Tools/test.sh or dotnet test "Tests~/Core".
   -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -15,6 +17,7 @@
 
   <ItemGroup>
     <Compile Include="../../Runtime/Core/*.cs" Link="Core/%(Filename)%(Extension)" />
+    <Compile Include="../../Tests/Editor/Core/*.cs" Link="Tests/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
