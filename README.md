@@ -74,7 +74,7 @@ Or add it to `Packages/manifest.json` yourself:
 }
 ```
 
-To pin a version, append a release tag such as `#v0.2.1` to the URL once that
+To pin a version, append a release tag such as `#v0.3.0` to the URL once that
 tag exists.
 
 **Upgrading from a copied 0.2.0.** If you followed the 0.2.0 workaround and
@@ -163,6 +163,10 @@ Everything game code needs is static on `Ravensight`:
 | `Ravensight.IsPlaytest` | True when a Ravensight Playtest run launched this build. |
 | `Ravensight.SetPlaytestContext(token, runId)` | For builds that cannot read environment variables, such as mobile. Call before the component wakes. |
 | `Ravensight.IsReady` | True once a session exists. |
+| `Ravensight.TrackPurchase(amount, currency, itemType, itemId, ...)` | A purchase. See [Typed events](#typed-events). |
+| `Ravensight.TrackResource(flow, resource, amount, ...)` | A resource gained (`source`) or spent (`sink`). |
+| `Ravensight.TrackProgression(status, p1, p2, p3, score, ...)` | A progression step: `start`, `complete` or `fail`. |
+| `Ravensight.TrackError(severity, message, stack, ...)` | An error, with a severity from `debug` to `critical`. |
 | `Ravensight.Client` | The underlying `RavensightClient` for anything else. |
 
 Event values can be strings, numbers, bools, nulls, nested dictionaries or
@@ -203,6 +207,7 @@ catch (RavensightException e)
 | Track Lifecycle Events | on | Sends `game_started` and `game_exited`. |
 | Track Pause Events | off | Also sends `game_paused` and `game_resumed`. |
 | Session Timeout Seconds | `1800` | iOS and Android: time in the background after which returning starts a new session. |
+| Performance | off | Opt in to per session frame rate sampling and one `health` event. See [Typed events](#typed-events). |
 | Verbose Logging | off | Logs SDK activity to the console. Warnings you need to act on are always logged. |
 
 ## Automatic events
@@ -308,6 +313,44 @@ Ravensight.Track("checkpoint_reached", new Dictionary<string, object>
 ```
 
 The full rules are at https://ravensight.io/docs/#detection-rules.
+
+## Typed events
+
+Four helpers send the reserved `rs_*` properties the dashboard reads for
+revenue, economy, progression and errors. They are thin wrappers over `Track`,
+so queueing, batching, retries and the player's opt out behave exactly as for
+any event, and they return what `Track` returns. Every helper takes an
+optional `extra` dictionary (the reserved keys win over it) and an optional
+`eventName`. They never throw on bad input: a wrong value is sent and the
+server flags it, which shows on the Implementation health card.
+
+```csharp
+// Money is whole minor units: 499 is 4.99. An integer or a digit string.
+// The currency is upper-cased. Default event name: "purchase".
+Ravensight.TrackPurchase(499, "usd", "gem_pack", "gems_100",
+    cart: "cart_7", transactionId: "txn_123");
+
+// flow is "source" or "sink". Default name: "resource_source" or "resource_sink".
+Ravensight.TrackResource(RavensightTyped.Source, "gold", 250, itemType: "quest", itemId: "q7");
+
+// status is "start", "complete" or "fail". Default name: "progression_<status>".
+Ravensight.TrackProgression(RavensightTyped.Complete, "world1", "level2", score: 1500);
+
+// severity is debug, info, warning, error or critical. The message is cut to
+// 200 characters and the stack to 2000. Default name: "error".
+Ravensight.TrackError(RavensightTyped.Error, ex.Message, ex.StackTrace);
+```
+
+### Performance
+
+Tick the Performance field in the Inspector (or set
+`RavensightConfig.Performance` when you build the client yourself) to opt in.
+The component then reads `Time.unscaledDeltaTime` once a second in `Update`,
+keeps at most 600 samples, and sends exactly one `health` event per session
+with the median and 10th percentile frames per second, memory in MB and boot
+time in milliseconds. It is sent when the app goes to the background on iOS and
+Android, and when it quits on desktop, never from `Update` itself. With no
+sample taken, nothing is sent. It is off by default.
 
 ## Device id and privacy
 

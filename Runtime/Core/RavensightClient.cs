@@ -93,6 +93,12 @@ namespace RealitySE
         /// session opened by this client is sent with it as joinToken.
         /// </summary>
         public string JoinToken;
+        /// <summary>
+        /// Opt in to per session performance sampling. Off by default. When on,
+        /// the Unity layer feeds frame times to <see cref="RavensightClient.SamplePerformance"/>
+        /// and one <c>health</c> event is sent per session.
+        /// </summary>
+        public bool Performance;
         /// <summary>The playtest run, or null for a real player.</summary>
         public RavensightPlaytestContext Playtest;
         /// <summary>Persistent storage. Null keeps everything in memory.</summary>
@@ -136,7 +142,7 @@ namespace RealitySE
     /// </summary>
     public sealed class RavensightClient
     {
-        public const string SdkVersion = "0.2.1";
+        public const string SdkVersion = "0.3.0";
         /// <summary>The bare host. "/api/v1" is appended by <see cref="NormalizeApiUrl"/>.</summary>
         public const string DefaultApiUrl = "https://api.ravensight.io";
         /// <summary>Server hard limit on POST /track/batch.</summary>
@@ -193,6 +199,8 @@ namespace RealitySE
         private bool _gameStartedQueued;
         private bool _gameExitedQueued;
         private long _backgroundedAtMs;
+        private readonly RavensightFrameSampler _frames = new RavensightFrameSampler();
+        private bool _healthSent;
 
         public string ApiUrl { get; private set; }
         public string DeviceId { get; private set; }
@@ -547,6 +555,8 @@ namespace RealitySE
             InvalidateSession();
             _gameStartedQueued = false;
             _gameExitedQueued = false;
+            _healthSent = false;
+            _frames.Reset();
             // Queued before any await so it leads the new session.
             QueueGameStarted();
 
@@ -642,6 +652,78 @@ namespace RealitySE
         public bool Track(string eventName)
         {
             return Track(eventName, null);
+        }
+
+        // --- Typed events -----------------------------------------------------
+        // Thin helpers over Track: each builds the reserved rs_* properties and
+        // calls the generic track, so delivery, opt out and playtest are the
+        // same. See RavensightTyped for the exact property sets.
+
+        /// <summary>A purchase. Amount is integer minor units (499 is 4.99) or a digit string.</summary>
+        public bool TrackPurchase(object amount, string currency, string itemType, string itemId,
+            string cart = null, string transactionId = null,
+            Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.Purchase(amount, currency, itemType, itemId, cart, transactionId, extra, eventName));
+        }
+
+        /// <summary>A resource gain (<c>source</c>) or spend (<c>sink</c>).</summary>
+        public bool TrackResource(string flow, string resource, double amount,
+            string itemType = null, string itemId = null,
+            Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.Resource(flow, resource, amount, itemType, itemId, extra, eventName));
+        }
+
+        /// <summary>A progression step: <c>start</c>, <c>complete</c> or <c>fail</c>.</summary>
+        public bool TrackProgression(string status, string p1, string p2 = null, string p3 = null,
+            double? score = null, Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.Progression(status, p1, p2, p3, score, extra, eventName));
+        }
+
+        /// <summary>An error. The message is cut to 200 characters and the stack to 2000.</summary>
+        public bool TrackError(string severity, string message, string stack = null,
+            Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.ErrorEvent(severity, message, stack, extra, eventName));
+        }
+
+        private bool TrackTyped(RavensightTypedEvent evt)
+        {
+            return Track(evt.Name, evt.Data);
+        }
+
+        /// <summary>True when performance sampling was switched on in the config.</summary>
+        public bool PerformanceEnabled
+        {
+            get { return _config.Performance; }
+        }
+
+        /// <summary>
+        /// Feeds one frame's unscaled seconds. Takes a sample once a second;
+        /// a no-op unless <see cref="RavensightConfig.Performance"/> is on.
+        /// </summary>
+        public void SamplePerformance(double frameSeconds)
+        {
+            if (!_config.Performance || _healthSent) return;
+            _frames.Tick(frameSeconds);
+        }
+
+        /// <summary>
+        /// Queues the session's one <c>health</c> event: median and 10th
+        /// percentile frames per second, plus memory and boot time where the
+        /// caller has them. Returns false when sampling is off, nothing was
+        /// sampled, one was already sent this session, or tracking is off.
+        /// Call it on background entry or quit, never per frame.
+        /// </summary>
+        public bool SendHealth(double? memoryMb = null, double? bootMs = null)
+        {
+            if (!_config.Performance || _healthSent || !IsActive) return false;
+            RavensightHealthSummary summary = _frames.Summarize();
+            if (summary.Samples == 0) return false;
+            _healthSent = true;
+            return TrackTyped(RavensightTyped.Health(summary, memoryMb, bootMs));
         }
 
         /// <summary>Queues an event with an explicit Unix seconds timestamp.</summary>
@@ -1081,6 +1163,7 @@ namespace RealitySE
                 body["deviceId"] = DeviceId;
                 body["gameVersion"] = _config.GameVersion;
                 body["platform"] = _config.Platform;
+                body["sdk"] = "unity/" + SdkVersion;
                 if (joinToken != null) body["joinToken"] = joinToken;
 
                 RavensightResponse response = await Send(

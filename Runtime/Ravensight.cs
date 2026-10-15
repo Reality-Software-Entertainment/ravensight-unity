@@ -72,6 +72,9 @@ namespace RealitySE
         [Tooltip("iOS and Android: seconds in the background after which returning starts a new session.")]
         [SerializeField] private int sessionTimeoutSeconds = RavensightClient.DefaultSessionTimeoutSeconds;
 
+        [Tooltip("Opt in: sample the frame rate once a second and send one health event per session, on background (mobile) or quit (desktop). Off by default.")]
+        [SerializeField] private bool performance = false;
+
         [Tooltip("Log SDK activity to the Unity console. Warnings that need your attention are always logged.")]
         [SerializeField] private bool verboseLogging = false;
 
@@ -82,6 +85,7 @@ namespace RealitySE
         private bool _editorHold;
         private bool _quitting;
         private bool _quitHeld;
+        private double _bootMs;
 
         private struct PendingEvent
         {
@@ -288,6 +292,7 @@ namespace RealitySE
             config.HoldDisabled = _editorHold;
             config.TrackLifecycleEvents = trackLifecycleEvents;
             config.SessionTimeoutSeconds = sessionTimeoutSeconds;
+            config.Performance = performance;
             config.Playtest = ResolvePlaytest();
             config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
 
@@ -321,6 +326,7 @@ namespace RealitySE
             // game_started first, with the real start time, then anything
             // tracked before the component woke. Both are dropped while the
             // player is opted out or the client is disabled.
+            _bootMs = Time.realtimeSinceStartup * 1000.0;
             _client.Begin();
             ReplayPendingEvents();
         }
@@ -361,6 +367,10 @@ namespace RealitySE
             // A client that started disabled boots the first time it is enabled.
             if (!_booting && !_bootedWhileActive && _client.IsActive && !_client.SettingsChecked) Boot();
 
+            // Opt in. Only reads the frame time here; the health event is
+            // queued from background entry or quit, never from this hook.
+            if (_client.PerformanceEnabled) _client.SamplePerformance(Time.unscaledDeltaTime);
+
             if (autoFlushSeconds <= 0f) return;
             _flushTimer += Time.unscaledDeltaTime;
             if (_flushTimer < autoFlushSeconds) return;
@@ -383,6 +393,8 @@ namespace RealitySE
             if (paused)
             {
                 if (trackPauseEvents) _client.Track("game_paused");
+                // Before EnterBackground, whose flush would otherwise leave it behind.
+                QueueHealth();
                 // On iOS and Android this flushes and saves the exit marker.
                 if (IsMobileRuntime) _client.EnterBackground();
                 else Observe(_client.AutoFlushAsync());
@@ -409,6 +421,7 @@ namespace RealitySE
             // last batch, game_exited included, can leave.
             if (_quitHeld || _client == null || !_client.IsActive || !isActiveAndEnabled) return true;
             _quitHeld = true;
+            QueueHealth();
             _client.QueueGameExited();
             StartCoroutine(FlushThenQuit());
             return false;
@@ -425,10 +438,28 @@ namespace RealitySE
             Application.Quit();
         }
 
+        // Queues the session's one health event (a no-op unless Performance is
+        // on, nothing was sampled, or one was already sent).
+        private void QueueHealth()
+        {
+            if (_client == null || !_client.PerformanceEnabled) return;
+            double? memoryMb = null;
+            try
+            {
+                memoryMb = Math.Round(UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / 1048576.0, 1);
+            }
+            catch (Exception)
+            {
+                // Not every platform exposes it; the field is optional.
+            }
+            _client.SendHealth(memoryMb, Math.Round(_bootMs));
+        }
+
         private void OnApplicationQuit()
         {
             _quitting = true;
             if (_client == null) return;
+            QueueHealth();
             // Once per session. With an open session the request is issued
             // before this returns; the process may still end before it lands.
             _client.QueueGameExited();
@@ -475,6 +506,60 @@ namespace RealitySE
         public static bool Track(string eventName)
         {
             return Track(eventName, null);
+        }
+
+        // --- Typed events ------------------------------------------------------
+        // Thin helpers over Track(name, data): same queueing, batching, retries
+        // and opt out, including holding calls made before the component wakes.
+
+        /// <summary>
+        /// A purchase. <paramref name="amount"/> is integer minor units (499 is
+        /// 4.99) or a digit string; a wrong value is flagged by the server, not
+        /// thrown here. The currency is upper-cased. Default event name "purchase".
+        /// </summary>
+        public static bool TrackPurchase(object amount, string currency, string itemType, string itemId,
+            string cart = null, string transactionId = null,
+            Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.Purchase(amount, currency, itemType, itemId, cart, transactionId, extra, eventName));
+        }
+
+        /// <summary>
+        /// A resource gain or spend. <paramref name="flow"/> is "source" or
+        /// "sink" (see <see cref="RavensightTyped"/>). Default event name
+        /// "resource_source" or "resource_sink".
+        /// </summary>
+        public static bool TrackResource(string flow, string resource, double amount,
+            string itemType = null, string itemId = null,
+            Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.Resource(flow, resource, amount, itemType, itemId, extra, eventName));
+        }
+
+        /// <summary>
+        /// A progression step: status "start", "complete" or "fail". Default
+        /// event name "progression_start", "progression_complete" or "progression_fail".
+        /// </summary>
+        public static bool TrackProgression(string status, string p1, string p2 = null, string p3 = null,
+            double? score = null, Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.Progression(status, p1, p2, p3, score, extra, eventName));
+        }
+
+        /// <summary>
+        /// An error. Severity is debug, info, warning, error or critical. The
+        /// message is cut to 200 characters and the stack to 2000. Default
+        /// event name "error".
+        /// </summary>
+        public static bool TrackError(string severity, string message, string stack = null,
+            Dictionary<string, object> extra = null, string eventName = null)
+        {
+            return TrackTyped(RavensightTyped.ErrorEvent(severity, message, stack, extra, eventName));
+        }
+
+        private static bool TrackTyped(RavensightTypedEvent evt)
+        {
+            return Track(evt.Name, evt.Data);
         }
 
         /// <summary>

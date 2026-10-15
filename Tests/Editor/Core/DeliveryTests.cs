@@ -27,7 +27,7 @@ namespace RealitySE.Tests
         public void DefaultIsTheBareHost()
         {
             Assert.Equal("https://api.ravensight.io", RavensightClient.DefaultApiUrl);
-            Assert.Equal("0.2.1", RavensightClient.SdkVersion);
+            Assert.Equal("0.3.0", RavensightClient.SdkVersion);
         }
 
         [Fact]
