@@ -16,7 +16,13 @@ dependencies.
 
 ## Verification status
 
-What has been run, on a Mac with Unity 6000.6.5f1 (Unity 6) in batch mode:
+**Version 0.3.0 is unverified.** The typed event helpers and the health
+sampling have not been compiled or run: there was no Unity or .NET SDK where
+they were written. Treat them as unverified until the owner has run
+`Tools/test.sh`, `Tools/compile-check.sh` and the Unity Test Runner. The counts
+below are from 0.2.1 and are not updated yet.
+
+What has been run (for 0.2.1), on a Mac with Unity 6000.6.5f1 (Unity 6) in batch mode:
 
 * **Editor import and compile.** The package was added to a fresh project as a
   local package and as a git dependency. Both assemblies (`RealitySE.Ravensight`
@@ -358,7 +364,8 @@ The SDK generates a random device id on first run (`dev_` plus 32 hex
 characters from the platform's secure random generator) and stores it in
 `PlayerPrefs` under `ravensight_device_id`. No hardware identifier, advertising
 id, IP based fingerprint or personal data is collected by the SDK itself. Only
-the events you choose to send leave the device.
+the events you choose to send leave the device. If you switch Performance on,
+one extra `health` event per session carries frame rate, memory and boot time.
 
 The player's choice is stored by the SDK under `ravensight_tracking_enabled`.
 `Ravensight.SetTrackingEnabled(false)` saves it at once, discards anything still
@@ -466,7 +473,9 @@ WebGL builds should work, with two caveats (not yet verified in a browser):
 * `PlayerPrefs` is backed by IndexedDB and some browsers clear it aggressively,
   so returning players may look new.
 * Quit is unreliable in a browser tab. Flush at points you control, such as the
-  end of a level, rather than relying on quit.
+  end of a level, rather than relying on quit. The same applies to the
+  Performance `health` event, which is sent on quit and may never be sent in
+  WebGL.
 
 ## Architecture
 

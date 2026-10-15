@@ -707,6 +707,12 @@ namespace RealitySE
         public void SamplePerformance(double frameSeconds)
         {
             if (!_config.Performance || _healthSent) return;
+            if (!IsActive)
+            {
+                // Frames gathered while opted out or disabled are never sent.
+                _frames.Reset();
+                return;
+            }
             _frames.Tick(frameSeconds);
         }
 

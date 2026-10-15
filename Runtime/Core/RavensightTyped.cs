@@ -111,11 +111,19 @@ namespace RealitySE
             return Make("health", data);
         }
 
-        // The caller's keys go in first so the reserved keys written after
-        // them always win.
+        // The caller's non-reserved keys go in first; every rs_ key is dropped.
         private static Dictionary<string, object> NewData(Dictionary<string, object> extra)
         {
-            return extra == null ? new Dictionary<string, object>() : new Dictionary<string, object>(extra);
+            Dictionary<string, object> data = new Dictionary<string, object>();
+            if (extra == null) return data;
+            foreach (KeyValuePair<string, object> pair in extra)
+            {
+                // rs_ keys belong to the helpers (rs_invalid to the server), so
+                // an extra can never smuggle one past a cut or a default.
+                if (pair.Key != null && pair.Key.StartsWith("rs_", StringComparison.Ordinal)) continue;
+                data[pair.Key] = pair.Value;
+            }
+            return data;
         }
 
         private static string Name(string overrideName, string fallback)

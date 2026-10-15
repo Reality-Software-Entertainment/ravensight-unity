@@ -393,8 +393,10 @@ namespace RealitySE
             if (paused)
             {
                 if (trackPauseEvents) _client.Track("game_paused");
-                // Before EnterBackground, whose flush would otherwise leave it behind.
-                QueueHealth();
+                // Mobile only, before EnterBackground, whose flush would otherwise
+                // leave it behind. On desktop a pause is only a lost focus, so
+                // health waits for the quit paths.
+                if (IsMobileRuntime) QueueHealth();
                 // On iOS and Android this flushes and saves the exit marker.
                 if (IsMobileRuntime) _client.EnterBackground();
                 else Observe(_client.AutoFlushAsync());
@@ -446,7 +448,9 @@ namespace RealitySE
             double? memoryMb = null;
             try
             {
-                memoryMb = Math.Round(UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / 1048576.0, 1);
+                long bytes = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
+                // 0 means the platform does not report it.
+                if (bytes > 0) memoryMb = Math.Round(bytes / 1048576.0, 1);
             }
             catch (Exception)
             {

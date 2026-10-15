@@ -2,7 +2,7 @@
   "name": "com.realityse.ravensight",
   "version": "0.3.0",
   "displayName": "Ravensight Analytics",
-  "description": "Official Unity SDK for Ravensight player analytics. Sessions, batched events, an offline queue, a saved player opt-out and the server kill switch. Verified in the Unity 6 Editor and a macOS player.",
+  "description": "Official Unity SDK for Ravensight player analytics. Sessions, batched events, an offline queue, a saved player opt-out and the server kill switch. The 0.2.1 core was verified in the Unity 6 Editor and a macOS player; the 0.3.0 typed events and health sampling are not yet verified.",
   "unity": "2021.3",
   "license": "MIT",
   "author": {

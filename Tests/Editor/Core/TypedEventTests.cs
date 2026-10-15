@@ -167,6 +167,39 @@ namespace RealitySE.Tests
         }
 
         [Fact]
+        public void ReservedKeysInExtraAreDroppedSoTheyCannotBypassACutOrADefault()
+        {
+            Dictionary<string, object> extra = new Dictionary<string, object>
+            {
+                { "rs_stack", new string('x', 5000) },
+                { "rs_invalid", "none" },
+                { "rs_p3", "sneak" },
+                { "keep", 1 },
+            };
+
+            RavensightTypedEvent error = RavensightTyped.ErrorEvent("error", "m", null, extra);
+            RavensightTypedEvent step = RavensightTyped.Progression("start", "w1", "l1", null, null, extra);
+
+            Assert.Equal(new[] { "keep", "rs_kind", "rs_message", "rs_severity" }, Keys(error.Data).ToArray());
+            Assert.Equal(new[] { "keep", "rs_kind", "rs_p1", "rs_p2", "rs_status" }, Keys(step.Data).ToArray());
+        }
+
+        [Fact]
+        public async Task FramesGatheredWhileOptedOutAreNeverSent()
+        {
+            Harness h = new Harness();
+            RavensightConfig config = h.Config();
+            config.Performance = true;
+            RavensightClient client = await h.Started(config);
+
+            client.SetTrackingEnabled(false);
+            client.SamplePerformance(1.0);
+            client.SetTrackingEnabled(true);
+
+            Assert.False(client.SendHealth());
+        }
+
+        [Fact]
         public void TheEventNameCanBeOverriddenOnEveryHelper()
         {
             Assert.Equal("iap", RavensightTyped.Purchase(1, "usd", "a", "b", null, null, null, "iap").Name);
