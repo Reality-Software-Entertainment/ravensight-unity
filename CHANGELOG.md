@@ -2,6 +2,69 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.0] - 2026-10-16
+
+For games whose builds or source anyone can download. A game that sets
+only its key and none of the new options behaves as on 0.2.1, except for
+the changes listed first.
+
+### Changes for 0.2.1 games
+
+* A `401` or `403` to the startup settings check or to `POST /session`
+  (other than `tracking_disabled` and a refused playtest token) now ends the
+  run: the queue is cleared, nothing more is sent, and `IsActive` and the new
+  `IsEnabled` are false. In 0.2.1 the events stayed queued and `Flush()`
+  made one more attempt. The status reason is still `invalid_key`, logged
+  once. A batch `401` still opens a new session first; a later batch `403`
+  still only pauses the automatic flush.
+* Retry waits carry plus or minus 20 percent jitter, never under half a
+  second and never over 5 minutes. `Retry-After` is still obeyed exactly.
+* Every event's data gains an `rs_event_id` key. The caller's dictionary is
+  never changed: the SDK queues a copy.
+* An event whose data is over 8,192 bytes as JSON is dropped before it is
+  queued: `Track` returns false, `Stats.Dropped` counts it and one warning
+  is logged for the run. In 0.2.1 it was sent and dropped on the server's
+  `400`.
+* `RavensightClient` no longer throws on an empty `IngestKey`; it starts
+  inert instead.
+
+### Added
+
+* **Inert without a key.** An empty Ingest Key (or `Ravensight.Initialize`
+  with a null or empty key) reads and writes nothing in `PlayerPrefs`,
+  builds no network transport, makes no request and runs no flush timer.
+  The status reason is `no_key`. One warning, silenced by the new
+  **Optional** field (`RavensightOptions.Optional`, `RavensightConfig.Optional`).
+* **`Ravensight.IsEnabled`** and `RavensightClient.IsEnabled`, true only while
+  the SDK is collecting. `Ravensight.DeviceId`.
+* **Consent** (`RavensightConsent.OptOut`, the default, or `OptIn`), an
+  Inspector field and a `RavensightOptions` and `RavensightConfig` member.
+  With Opt In nothing is sent, no device id is made and tracked events are
+  dropped until `SetTrackingEnabled(true)`. The yes is saved in
+  `PlayerPrefs` as `ravensight_optin`; a no removes it and keeps the device
+  id. Events tracked right after the yes are queued while the settings check
+  runs.
+* **Distribution**, an Inspector field and option: a label of at most 40
+  characters, sent on `POST /session` as `distribution`. A label that is too
+  long or has a control character is not sent and is logged once.
+* **`rs_event_id`** on every event, including the automatic ones: the first
+  16 characters of the device id, the start time in hex, an 8 hex character
+  launch nonce from `System.Security.Cryptography.RandomNumberGenerator`, and
+  a counter. A batch sent again carries the same ids.
+* `Ravensight.Initialize(key, RavensightOptions)`.
+* README: a "Public builds" section and a compatibility table.
+* Tests: `Tests/Editor/Core/PublicBuildTests.cs` (28 cases), one more delivery case and two Play Mode
+  cases, an inert component and an opt-in boot.
+
+### Verified
+
+* Unity 6000.6.5f1 in batch mode, the package as a local dependency of a
+  fresh project: **87 EditMode tests and 6 PlayMode tests passing**, with no
+  compiler warnings from the package.
+* Not run for 0.3.0: the .NET suite and C# 7.3 compile check (no .NET SDK on
+  the machine; CI runs them), a player build, a git URL install, and
+  everything 0.2.1 already listed as not run.
+
 ## [0.2.1] - 2026-10-10
 
 Verified in the Unity Editor. No change to the public API or to what is sent.
