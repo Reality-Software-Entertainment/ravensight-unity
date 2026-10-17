@@ -27,11 +27,11 @@ namespace RealitySE.Tests
         public void DefaultIsTheBareHost()
         {
             Assert.Equal("https://api.ravensight.io", RavensightClient.DefaultApiUrl);
-            Assert.Equal("0.2.1", RavensightClient.SdkVersion);
+            Assert.Equal("0.3.0", RavensightClient.SdkVersion);
         }
 
         [Fact]
-        public async Task SettingsUnauthorizedMakesOneRequestThenNone()
+        public async Task SettingsUnauthorizedEndsTheRunAfterOneRequest()
         {
             Harness h = new Harness();
             h.Transport.Routes["/settings"] = r => FakeTransport.Json(401, "{\"error\":\"invalid_api_key\"}");
@@ -39,39 +39,41 @@ namespace RealitySE.Tests
             client.Begin();
 
             RavensightInitResult init = await client.InitAsync();
-            for (int i = 0; i < 120; i++) client.Track("e" + i);
+            for (int i = 0; i < 120; i++) Assert.False(client.Track("e" + i));
             h.Clock.Advance(600000);
             RavensightFlushResult auto = await client.AutoFlushAsync();
+            await client.FlushAsync();
 
             Assert.Equal(RavensightReason.InvalidKey, init.Reason);
             Assert.Equal(RavensightReason.InvalidKey, client.StatusReason);
-            Assert.Equal(RavensightReason.InvalidKey, auto.Skipped);
+            Assert.Equal("inactive", auto.Skipped);
+            Assert.False(client.IsEnabled);
             Assert.Single(h.Transport.Requests);
-            Assert.True(client.QueueCount > 0); // kept, the cap applies
+            Assert.Equal(0, client.QueueCount); // cleared
             Assert.Equal(new[] { RavensightClient.InvalidKeyWarning }, h.Warnings);
         }
 
         [Fact]
-        public async Task ExplicitFlushAfterARefusedKeyMakesOneMoreAttempt()
+        public async Task SessionUnauthorizedEndsTheRunAndNothingRestartsIt()
         {
             Harness h = new Harness();
             h.Transport.Routes["/session"] = r => FakeTransport.Json(401, "{\"error\":\"invalid_api_key\"}");
             RavensightClient client = await h.Started();
             int afterBoot = h.Transport.Requests.Count;
             Assert.Equal(RavensightReason.InvalidKey, client.StatusReason);
+            Assert.Equal(0, client.QueueCount);
 
+            h.Clock.Advance(600000);
             await client.AutoFlushAsync();
+            await client.FlushAsync(true);
+            client.SetTrackingEnabled(true);
+            client.Begin();
+            await client.InitAsync();
+            Assert.False(client.Track("later"));
+
             Assert.Equal(afterBoot, h.Transport.Requests.Count);
-
-            await client.FlushAsync();
-            Assert.Equal(afterBoot + 1, h.Transport.Requests.Count);
             Assert.Single(h.Warnings); // logged once
-
-            // A key that works again resumes automatic sending.
-            h.Transport.Routes.Remove("/session");
-            await client.FlushAsync();
-            Assert.Null(client.StatusReason);
-            Assert.Contains("game_started", h.Transport.SentEventNames());
+            Assert.False(client.IsEnabled);
         }
 
         [Fact]
@@ -242,10 +244,21 @@ namespace RealitySE.Tests
         }
 
         [Fact]
-        public async Task OtherForbiddenIsAnInvalidKey()
+        public async Task OtherForbiddenOnTheSessionEndsTheRunAsAnInvalidKey()
         {
             Harness h = new Harness();
             h.Transport.Routes["/session"] = r => FakeTransport.Json(403, "{\"error\":\"game_inactive_key\"}");
+            RavensightClient client = await h.Started();
+            Assert.Equal(RavensightReason.InvalidKey, client.StatusReason);
+            Assert.False(client.IsActive);
+            Assert.Equal(0, client.QueueCount);
+        }
+
+        [Fact]
+        public async Task OtherForbiddenOnABatchStillOnlyPausesTheTimer()
+        {
+            Harness h = new Harness();
+            h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(403, "{\"error\":\"game_inactive_key\"}");
             RavensightClient client = await h.Started();
             Assert.Equal(RavensightReason.InvalidKey, client.StatusReason);
             Assert.True(client.IsActive);

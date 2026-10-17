@@ -116,6 +116,9 @@ namespace RealitySE.Tests
             RavensightConfig config = new RavensightConfig();
             config.IngestKey = "gt_live_test";
             config.Storage = Storage;
+            // The middle of the jitter range: the unjittered backoff, so the
+            // exact waits the delivery tests check are unchanged.
+            config.Random = () => 0.5;
             return config;
         }
 

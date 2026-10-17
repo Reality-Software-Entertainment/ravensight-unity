@@ -41,6 +41,21 @@ namespace RealitySE
         public const string SessionFailed = "session_failed";
         /// <summary>The playtest job this run belongs to has finished.</summary>
         public const string PlaytestJobClosed = "playtest_job_closed";
+        /// <summary>Started with no ingest key. Inert for the run: no storage, no request.</summary>
+        public const string NoKey = "no_key";
+    }
+
+    /// <summary>When the SDK may start collecting.</summary>
+    public enum RavensightConsent
+    {
+        /// <summary>The default: on until the player opts out with SetTrackingEnabled(false).</summary>
+        OptOut = 0,
+        /// <summary>
+        /// Off until the player says yes with SetTrackingEnabled(true). Before
+        /// the yes no device id is made, nothing is sent and tracked events
+        /// are dropped. The yes is saved as ravensight_optin.
+        /// </summary>
+        OptIn = 1,
     }
 
     /// <summary>One queued analytics event.</summary>
@@ -63,8 +78,27 @@ namespace RealitySE
 
     public sealed class RavensightConfig
     {
-        /// <summary>Publishable ingest key, format gt_live_...</summary>
+        /// <summary>
+        /// Publishable ingest key, gt_live_... or a public build's gt_pub_...
+        /// Null or empty makes the client inert: no storage, no request, and
+        /// <see cref="RavensightClient.StatusReason"/> is "no_key".
+        /// </summary>
         public string IngestKey;
+        /// <summary>True silences the one warning an inert start (no key) logs.</summary>
+        public bool Optional;
+        /// <summary>OptOut (default) or OptIn. See <see cref="RavensightConsent"/>.</summary>
+        public RavensightConsent Consent = RavensightConsent.OptOut;
+        /// <summary>
+        /// A short label sent on POST /session as "distribution", such as
+        /// "native-release" or "web-demo". At most 40 characters and no
+        /// control characters; anything else is not sent and logged once.
+        /// </summary>
+        public string Distribution;
+        /// <summary>
+        /// 0 &lt;= x &lt; 1, for the retry jitter. Null uses a shared System.Random.
+        /// Tests pass a fixed value; 0.5 gives the unjittered backoff.
+        /// </summary>
+        public Func<double> Random;
         /// <summary>Host or base URL. Normalized to end in exactly one "/api/v1".</summary>
         public string ApiUrl = RavensightClient.DefaultApiUrl;
         public string GameVersion = "1.0.0";
@@ -136,7 +170,7 @@ namespace RealitySE
     /// </summary>
     public sealed class RavensightClient
     {
-        public const string SdkVersion = "0.2.1";
+        public const string SdkVersion = "0.3.0";
         /// <summary>The bare host. "/api/v1" is appended by <see cref="NormalizeApiUrl"/>.</summary>
         public const string DefaultApiUrl = "https://api.ravensight.io";
         /// <summary>Server hard limit on POST /track/batch.</summary>
@@ -145,14 +179,29 @@ namespace RealitySE
         public const int DefaultRetryMs = 10000;
         public const int MaxBackoffMs = 300000;
         public const int DefaultSessionTimeoutSeconds = 1800;
+        /// <summary>A retry is never sooner than this, jitter included.</summary>
+        public const int MinRetryMs = 500;
+        /// <summary>Retry waits are the backoff plus or minus this fraction.</summary>
+        public const double Jitter = 0.2;
+        /// <summary>The largest event the API accepts: its data as JSON, in UTF-8 bytes.</summary>
+        public const int MaxEventBytes = 8192;
+        /// <summary>The longest distribution label sent.</summary>
+        public const int MaxDistributionLength = 40;
 
         public const string DeviceIdKey = "ravensight_device_id";
         public const string TrackingEnabledKey = "ravensight_tracking_enabled";
+        /// <summary>Written only with <see cref="RavensightConsent.OptIn"/>, once the player has said yes.</summary>
+        public const string OptInKey = "ravensight_optin";
+        /// <summary>The per event id key inside each event's data.</summary>
+        public const string EventIdKey = "rs_event_id";
         public const string BackgroundMarkerKey = "ravensight_bg";
         public const string PlaytestHeader = "X-Ravensight-Playtest";
 
         public const string InvalidKeyWarning =
-            "Ravensight: ingest key refused (invalid_key), sending stopped for this run. Check your gt_live_ key.";
+            "Ravensight: ingest key refused (invalid_key), sending stopped for this run. Check your gt_live_ or gt_pub_ key.";
+
+        public const string NoKeyWarning =
+            "Ravensight: no ingest key, so analytics is off for this run (set Optional to silence this line).";
 
         /// <summary>The feedback categories the server accepts.</summary>
         public static readonly ReadOnlyCollection<string> FeedbackCategories = Array.AsReadOnly(new string[]
@@ -189,6 +238,13 @@ namespace RealitySE
         private string _status;
         private string _joinToken;
 
+        private readonly bool _inert;
+        private readonly string _distribution;
+        private readonly Func<double> _random;
+        private readonly long _startSeconds;
+        private string _eventNonce;
+        private long _eventCounter;
+
         private bool _begun;
         private bool _gameStartedQueued;
         private bool _gameExitedQueued;
@@ -221,15 +277,13 @@ namespace RealitySE
         {
             if (config == null) throw new ArgumentNullException("config");
             if (transport == null) throw new ArgumentNullException("transport");
-            if (string.IsNullOrEmpty(config.IngestKey) || config.IngestKey.Trim().Length == 0)
-            {
-                throw new ArgumentException("Ravensight: IngestKey is required (your gt_live_... key)", "config");
-            }
 
             _config = config;
             _transport = transport;
             _nowMs = nowMs ?? DefaultClock;
             _storage = config.Storage ?? new RavensightMemoryStorage();
+            _random = config.Random ?? SharedRandom;
+            _startSeconds = _nowMs() / 1000L;
 
             ApiUrl = NormalizeApiUrl(config.ApiUrl);
             TrackingEnabled = true;
@@ -237,6 +291,18 @@ namespace RealitySE
             _joinToken = string.IsNullOrEmpty(config.JoinToken) || config.JoinToken.Trim().Length == 0
                 ? null
                 : config.JoinToken.Trim();
+
+            if (string.IsNullOrEmpty(config.IngestKey) || config.IngestKey.Trim().Length == 0)
+            {
+                // No key: a public repository's clone or a development build.
+                // Storage is never read or written and nothing is sent.
+                _inert = true;
+                DeviceId = null;
+                _status = RavensightReason.NoKey;
+                return;
+            }
+
+            _distribution = ValidDistribution(config.Distribution);
 
             if (config.Playtest != null && config.Playtest.HasToken)
             {
@@ -265,8 +331,16 @@ namespace RealitySE
             }
             else
             {
-                _optedOut = _storage.GetInt(TrackingEnabledKey, 1) == 0;
-                DeviceId = string.IsNullOrEmpty(config.DeviceId) ? LoadOrCreateDeviceId(_storage) : config.DeviceId;
+                _optedOut = !ReadTrackingChoice(_storage, config.Consent);
+                if (config.Consent == RavensightConsent.OptIn && _optedOut)
+                {
+                    // Before the player's yes no device id is made or read.
+                    DeviceId = string.IsNullOrEmpty(config.DeviceId) ? null : config.DeviceId;
+                }
+                else
+                {
+                    DeviceId = string.IsNullOrEmpty(config.DeviceId) ? LoadOrCreateDeviceId(_storage) : config.DeviceId;
+                }
                 if (_optedOut && _storage.GetString(BackgroundMarkerKey) != null)
                 {
                     _storage.DeleteKey(BackgroundMarkerKey);
@@ -280,6 +354,92 @@ namespace RealitySE
         private static long DefaultClock()
         {
             return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+        }
+
+        private static readonly Random JitterSource = new Random();
+        private static readonly object JitterGate = new object();
+
+        private static double SharedRandom()
+        {
+            lock (JitterGate) { return JitterSource.NextDouble(); }
+        }
+
+        /// <summary>
+        /// The distribution label as it will be sent, or null when it is unset
+        /// or not sendable (over 40 characters, or a control character).
+        /// </summary>
+        public static string ValidDistribution(string value)
+        {
+            if (value == null) return null;
+            string trimmed = value.Trim();
+            if (trimmed.Length == 0) return null;
+            if (trimmed.Length > MaxDistributionLength) return null;
+            for (int i = 0; i < trimmed.Length; i++)
+            {
+                if (char.IsControl(trimmed[i])) return null;
+            }
+            return trimmed;
+        }
+
+        /// <summary>
+        /// The player's saved choice for a consent mode. OptOut: true unless
+        /// they opted out. OptIn: true only once the yes has been saved and
+        /// not revoked.
+        /// </summary>
+        public static bool ReadTrackingChoice(IRavensightStorage storage, RavensightConsent consent)
+        {
+            if (storage.GetInt(TrackingEnabledKey, 1) == 0) return false;
+            if (consent == RavensightConsent.OptIn) return storage.GetInt(OptInKey, 0) == 1;
+            return true;
+        }
+
+        /// <summary>
+        /// "rs_event_id": the first 16 characters of the device id, the start
+        /// time in hex, the launch nonce and a counter. Any character outside
+        /// A-Z, a-z, 0-9, "_" and "-" becomes "_", so it always matches
+        /// ^[A-Za-z0-9_-]{1,64}$.
+        /// </summary>
+        public static string EventId(string deviceId, long startSeconds, string nonce, long counter)
+        {
+            string prefix = deviceId ?? "";
+            if (prefix.Length > 16) prefix = prefix.Substring(0, 16);
+            StringBuilder id = new StringBuilder(64);
+            for (int i = 0; i < prefix.Length; i++)
+            {
+                char c = prefix[i];
+                bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+                id.Append(safe ? c : '_');
+            }
+            id.Append('-').Append(Math.Max(0L, startSeconds).ToString("x"));
+            id.Append('-').Append(nonce);
+            id.Append('-').Append(counter.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return id.ToString();
+        }
+
+        /// <summary>Eight hex characters from the platform CSPRNG.</summary>
+        public static string NewLaunchNonce()
+        {
+            byte[] bytes = new byte[4];
+            try
+            {
+                using (RandomNumberGenerator rng = RandomNumberGenerator.Create())
+                {
+                    rng.GetBytes(bytes);
+                }
+            }
+            catch (Exception)
+            {
+                bytes = Guid.NewGuid().ToByteArray();
+            }
+            StringBuilder hex = new StringBuilder(8);
+            for (int i = 0; i < 4; i++) hex.Append(bytes[i].ToString("x2"));
+            return hex.ToString();
+        }
+
+        /// <summary>The size the server checks: the event's data as JSON, in UTF-8 bytes.</summary>
+        public static int EventBytes(Dictionary<string, object> data)
+        {
+            return Encoding.UTF8.GetByteCount(RavensightJson.Write(data ?? new Dictionary<string, object>()));
         }
 
         /// <summary>
@@ -338,8 +498,23 @@ namespace RealitySE
         /// </summary>
         public static void WriteTrackingChoice(IRavensightStorage storage, bool on)
         {
+            WriteTrackingChoice(storage, on, RavensightConsent.OptOut);
+        }
+
+        /// <summary>
+        /// As <see cref="WriteTrackingChoice(IRavensightStorage, bool)"/>, for a
+        /// consent mode. With OptIn a yes also saves ravensight_optin; a no
+        /// always removes it. The device id is kept either way.
+        /// </summary>
+        public static void WriteTrackingChoice(IRavensightStorage storage, bool on, RavensightConsent consent)
+        {
             storage.SetInt(TrackingEnabledKey, on ? 1 : 0);
-            if (!on) storage.DeleteKey(BackgroundMarkerKey);
+            if (on && consent == RavensightConsent.OptIn) storage.SetInt(OptInKey, 1);
+            if (!on)
+            {
+                storage.DeleteKey(OptInKey);
+                storage.DeleteKey(BackgroundMarkerKey);
+            }
             storage.Save();
         }
 
@@ -397,8 +572,25 @@ namespace RealitySE
         /// </summary>
         public bool IsActive
         {
-            get { return _enabled && !_optedOut && TrackingEnabled && _fatalReason == null && !_disposed; }
+            get { return !_inert && _enabled && !_optedOut && TrackingEnabled && _fatalReason == null && !_disposed; }
         }
+
+        /// <summary>
+        /// True only while the SDK is running and collecting. False when inert
+        /// (no key), switched off, opted out (or not yet opted in), switched
+        /// off by the server, or after a refused key. The same value as
+        /// <see cref="IsActive"/>, under the name every Ravensight SDK uses.
+        /// </summary>
+        public bool IsEnabled { get { return IsActive; } }
+
+        /// <summary>True when started with no ingest key. Nothing is stored or sent this run.</summary>
+        public bool IsInert { get { return _inert; } }
+
+        /// <summary>The consent mode this client was built with.</summary>
+        public RavensightConsent Consent { get { return _config.Consent; } }
+
+        /// <summary>The distribution label sent on the session, or null when none is sent.</summary>
+        public string Distribution { get { return _distribution; } }
 
         public int QueueCount { get { lock (_gate) { return _queue.Count; } } }
 
@@ -439,13 +631,22 @@ namespace RealitySE
                 return;
             }
 
-            WriteTrackingChoice(_storage, on);
+            // Saved even while inert or switched off, so a settings toggle
+            // always shows the player's real choice.
+            WriteTrackingChoice(_storage, on, _config.Consent);
+            if (_inert) return;
             if (_optedOut == !on) return;
             _optedOut = !on;
             if (!on)
             {
+                // The device id is kept; ResetDeviceId forgets it.
                 ClearQueue();
                 _backgroundedAtMs = 0;
+            }
+            else if (DeviceId == null)
+            {
+                // The first yes in opt-in mode: only now is an id made.
+                DeviceId = LoadOrCreateDeviceId(_storage);
             }
             SetStatus(null);
             if (on) QueueGameStarted();
@@ -462,6 +663,23 @@ namespace RealitySE
             {
                 WarnLine("Ravensight: ResetDeviceId is ignored during a playtest run.");
                 return DeviceId;
+            }
+
+            if (_inert || DeviceId == null || (_config.Consent == RavensightConsent.OptIn && _optedOut))
+            {
+                // Inert, or opt-in without a current yes: forget a saved id
+                // and make none. The next yes makes a fresh one.
+                _storage.DeleteKey(DeviceIdKey);
+                _storage.DeleteKey(BackgroundMarkerKey);
+                _storage.Save();
+                if (!_inert)
+                {
+                    DeviceId = null;
+                    ClearQueue();
+                    InvalidateSession();
+                    _backgroundedAtMs = 0;
+                }
+                return null;
             }
 
             DeviceId = ResetStoredDeviceId(_storage);
@@ -653,7 +871,18 @@ namespace RealitySE
             RavensightEvent evt = new RavensightEvent();
             evt.Name = eventName;
             evt.Data = WithPlaytestTags(data);
+            evt.Data[EventIdKey] = NextEventId();
             evt.Timestamp = timestampSeconds;
+
+            if (EventBytes(evt.Data) > MaxEventBytes)
+            {
+                // The server would refuse it with a 400; it is never sent.
+                lock (_gate) { _stats.Dropped++; }
+                WarnOnce("event_too_large", "Ravensight: dropped event \"" + eventName + "\": its data is larger than " +
+                                            MaxEventBytes + " bytes as JSON (further drops are not logged).");
+                Emit("dropped event " + eventName + ": event_too_large");
+                return false;
+            }
 
             int count;
             lock (_gate)
@@ -673,15 +902,31 @@ namespace RealitySE
             return true;
         }
 
+        /// <summary>A copy of the caller's data with the playtest tags, if any. Never the caller's own dictionary.</summary>
         private Dictionary<string, object> WithPlaytestTags(Dictionary<string, object> data)
         {
-            if (_playtestTags == null) return data;
-            // Never mutate the caller's dictionary.
             Dictionary<string, object> copy = data == null
                 ? new Dictionary<string, object>()
                 : new Dictionary<string, object>(data);
-            foreach (KeyValuePair<string, object> tag in _playtestTags) copy[tag.Key] = tag.Value;
+            if (_playtestTags != null)
+            {
+                foreach (KeyValuePair<string, object> tag in _playtestTags) copy[tag.Key] = tag.Value;
+            }
             return copy;
+        }
+
+        /// <summary>
+        /// The next rs_event_id. It lives inside the event's data, so a batch
+        /// sent again after a failure carries the same ids.
+        /// </summary>
+        private string NextEventId()
+        {
+            lock (_gate)
+            {
+                if (_eventNonce == null) _eventNonce = NewLaunchNonce();
+                _eventCounter++;
+                return EventId(DeviceId, _startSeconds, _eventNonce, _eventCounter);
+            }
         }
 
         /// <summary>
@@ -940,7 +1185,7 @@ namespace RealitySE
             ValidateFeedback(category, rating);
             if (!IsActive)
             {
-                throw new RavensightException("tracking is off", RavensightReason.Disabled, 0);
+                throw new RavensightException("tracking is off", _inert ? RavensightReason.NoKey : RavensightReason.Disabled, 0);
             }
 
             Dictionary<string, object> payload = new Dictionary<string, object>();
@@ -1025,12 +1270,12 @@ namespace RealitySE
             }
             if (response.Status == 401)
             {
-                RefuseKey();
+                EndRunForKey();
                 return;
             }
             if (response.Status == 403)
             {
-                HandleForbidden(response);
+                HandleForbidden(response, true);
                 return;
             }
             if (response.Status == 429)
@@ -1082,6 +1327,7 @@ namespace RealitySE
                 body["gameVersion"] = _config.GameVersion;
                 body["platform"] = _config.Platform;
                 if (joinToken != null) body["joinToken"] = joinToken;
+                if (_distribution != null) body["distribution"] = _distribution;
 
                 RavensightResponse response = await Send(
                     WithPlaytest(new RavensightRequest("POST", ApiUrl + "/session", RavensightJson.Write(body))
@@ -1126,12 +1372,12 @@ namespace RealitySE
                 string reason;
                 if (response.Status == 401)
                 {
-                    RefuseKey();
+                    EndRunForKey();
                     reason = RavensightReason.InvalidKey;
                 }
                 else if (response.Status == 403)
                 {
-                    reason = HandleForbidden(response);
+                    reason = HandleForbidden(response, true);
                 }
                 else if (response.Status == 429)
                 {
@@ -1214,6 +1460,7 @@ namespace RealitySE
             RavensightEvent exit = new RavensightEvent();
             exit.Name = "game_exited";
             exit.Data = WithPlaytestTags(new Dictionary<string, object>());
+            exit.Data[EventIdKey] = NextEventId();
             exit.Timestamp = timestampSeconds;
 
             List<object> events = new List<object>(1);
@@ -1243,6 +1490,15 @@ namespace RealitySE
         /// </summary>
         private string HandleForbidden(RavensightResponse response)
         {
+            return HandleForbidden(response, false);
+        }
+
+        /// <summary>
+        /// As above. endsRun is true for the settings check and POST /session,
+        /// where a refused key ends the run instead of only pausing the timer.
+        /// </summary>
+        private string HandleForbidden(RavensightResponse response, bool endsRun)
+        {
             string code = response.ErrorCode(null);
             if (code == "tracking_disabled")
             {
@@ -1261,7 +1517,8 @@ namespace RealitySE
                     "Ravensight: the playtest token was refused (invalid_playtest_token), sending stopped for this run.");
                 return RavensightReason.SessionFailed;
             }
-            RefuseKey();
+            if (endsRun) EndRunForKey();
+            else RefuseKey();
             return RavensightReason.InvalidKey;
         }
 
@@ -1283,6 +1540,19 @@ namespace RealitySE
             _invalidKey = true;
             SetStatus(RavensightReason.InvalidKey);
             WarnOnce("invalid_key", InvalidKeyWarning);
+        }
+
+        /// <summary>
+        /// The settings check or POST /session refused the key (revoked,
+        /// rotated or wrong). A retry cannot help, so the run ends here: the
+        /// queue is cleared, nothing more is sent, and a later
+        /// SetTrackingEnabled(true) restarts nothing. The next launch tries
+        /// the key again.
+        /// </summary>
+        private void EndRunForKey()
+        {
+            _invalidKey = true;
+            StopForRun(RavensightReason.InvalidKey, InvalidKeyWarning);
         }
 
         private void StopForRun(string reason, string message)
@@ -1307,6 +1577,7 @@ namespace RealitySE
 
         private string EffectiveStatus(string networkReason)
         {
+            if (_inert) return RavensightReason.NoKey;
             if (_fatalReason != null) return _fatalReason;
             if (!TrackingEnabled) return RavensightReason.TrackingDisabled;
             if (!_enabled || _optedOut) return RavensightReason.Disabled;
@@ -1332,11 +1603,29 @@ namespace RealitySE
             _retryAfterActive = false;
         }
 
+        /// <summary>
+        /// The next wait is the backoff plus or minus 20 percent, so many
+        /// copies of a game that lost the network together do not come back
+        /// together. Never under half a second, never over 5 minutes. A
+        /// server's Retry-After is applied exactly, elsewhere.
+        /// </summary>
         private void ScheduleBackoff()
         {
             _retryAfterActive = false;
-            _nextAttemptAtMs = _nowMs() + _backoffMs;
+            _nextAttemptAtMs = _nowMs() + JitteredWaitMs(_backoffMs, _random());
             _backoffMs = Math.Min(_backoffMs * 2, MaxBackoffMs);
+        }
+
+        /// <summary>The jittered wait for a backoff step. random is 0 &lt;= x &lt; 1; 0.5 returns the step itself.</summary>
+        public static long JitteredWaitMs(int backoffMs, double random)
+        {
+            if (double.IsNaN(random) || random < 0) random = 0;
+            if (random >= 1) random = 1;
+            double factor = 1 - Jitter + 2 * Jitter * random;
+            long wait = (long)Math.Round(backoffMs * factor);
+            if (wait > MaxBackoffMs) wait = MaxBackoffMs;
+            if (wait < MinRetryMs) wait = MinRetryMs;
+            return wait;
         }
 
         private void ApplyRetryAfter(RavensightResponse response)
@@ -1398,6 +1687,19 @@ namespace RealitySE
         /// <summary>Logs the run-stopping reason found at construction, if any. Call after wiring Warn.</summary>
         public void ReportStartupProblems()
         {
+            if (_inert)
+            {
+                if (!_config.Optional)
+                {
+                    WarnOnce(RavensightReason.NoKey, NoKeyWarning);
+                }
+                return;
+            }
+            if (_config.Distribution != null && _config.Distribution.Trim().Length > 0 && _distribution == null)
+            {
+                WarnOnce("distribution", "Ravensight: the distribution label is over " + MaxDistributionLength +
+                                         " characters or has a control character, so it is not sent.");
+            }
             if (_playtest != null && !_playtest.HasRunId)
             {
                 WarnOnce("fatal_" + RavensightReason.SessionFailed,
