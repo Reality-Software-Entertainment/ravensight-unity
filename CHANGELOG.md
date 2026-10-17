@@ -30,6 +30,8 @@ the changes listed first.
 
 ### Added
 
+* Declared the Unity Web Request module dependency so installation also compiles in minimal projects.
+
 * **Inert without a key.** An empty Ingest Key (or `Ravensight.Initialize`
   with a null or empty key) reads and writes nothing in `PlayerPrefs`,
   builds no network transport, makes no request and runs no flush timer.

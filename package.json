@@ -29,5 +29,8 @@
       "description": "One file tour of tracking, flushing, feedback, the privacy toggle and reset.",
       "path": "Samples~/QuickStart"
     }
-  ]
+  ],
+  "dependencies": {
+    "com.unity.modules.unitywebrequest": "1.0.0"
+  }
 }
