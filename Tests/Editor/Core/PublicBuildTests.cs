@@ -236,7 +236,7 @@ namespace RealitySE.Tests
 
             Dictionary<string, object> body = FakeTransport.BodyOf(h.Transport.To("/session")[0]);
             Assert.Equal("native-release", body["distribution"]);
-            Assert.Equal(new[] { "deviceId", "distribution", "gameVersion", "platform" }, body.Keys.OrderBy(k => k));
+            Assert.Equal(new[] { "deviceId", "distribution", "gameVersion", "platform", "sdk" }, body.Keys.OrderBy(k => k));
         }
 
         [Fact]
@@ -246,7 +246,7 @@ namespace RealitySE.Tests
             await h.Started();
 
             Dictionary<string, object> body = FakeTransport.BodyOf(h.Transport.To("/session")[0]);
-            Assert.Equal(new[] { "deviceId", "gameVersion", "platform" }, body.Keys.OrderBy(k => k));
+            Assert.Equal(new[] { "deviceId", "gameVersion", "platform", "sdk" }, body.Keys.OrderBy(k => k));
         }
 
         [Theory]

@@ -67,6 +67,30 @@ the changes listed first.
   the machine; CI runs them), a player build, a git URL install, and
   everything 0.2.1 already listed as not run.
 
+### Typed events and performance sampling (included in this release)
+
+### Added
+
+* Typed event helpers, thin wrappers over `Track` that set the reserved `rs_*`
+  properties the dashboard reads: `Ravensight.TrackPurchase`,
+  `TrackResource`, `TrackProgression` and `TrackError`. Each takes an optional
+  extra data map (the reserved keys win over it) and an optional event name.
+  They return what `Track` returns, never throw on bad input, and use the same
+  queue, batching, retries and opt out. The builders live in
+  `RavensightTyped` in `Runtime/Core`, so they are tested without the Editor.
+* Opt in performance sampling. Turn on the Performance field (or set
+  `RavensightConfig.Performance`) and the component samples the unscaled frame
+  time once a second in `Update`, keeping at most 600 samples. It sends one
+  `health` event per session, with median and 10th percentile frames per
+  second, memory in MB and boot time in milliseconds, when the app goes to the
+  background (iOS and Android) or quits (desktop). Nothing is sent when no
+  sample was taken, and it is off by default.
+* The session request now carries `"sdk": "unity/<version>"`.
+
+### Changed
+
+* `SdkVersion` and the package version are 0.3.0.
+
 ## [0.2.1] - 2026-10-10
 
 Verified in the Unity Editor. No change to the public API or to what is sent.
