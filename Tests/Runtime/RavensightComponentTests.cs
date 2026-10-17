@@ -160,6 +160,75 @@ namespace RealitySE.Tests
         }
 
         [UnityTest]
+        public IEnumerator NoKeyIsInertTouchesNoStorageAndSendsNothing()
+        {
+            RecordingTransport recorder = null;
+            Ravensight.TransportFactoryForTests = (runner, timeout) => recorder = new RecordingTransport(runner);
+            RavensightMemoryStorage storage = new RavensightMemoryStorage();
+            Ravensight.StorageForTests = storage;
+
+            Ravensight component = CreateComponent(null);
+#if UNITY_EDITOR
+            UnityEditor.SerializedObject fields = new UnityEditor.SerializedObject(component);
+            fields.FindProperty("ingestKey").stringValue = "";
+            fields.FindProperty("optional").boolValue = true;
+            fields.ApplyModifiedPropertiesWithoutUndo();
+#endif
+            _host.SetActive(true);
+            yield return null;
+            yield return null;
+
+            Assert.IsFalse(Ravensight.Track("anything"));
+            Ravensight.SetEnabled(true);
+            yield return null;
+
+            Assert.IsNull(recorder, "an inert start must not build a network transport");
+            Assert.AreEqual(0, storage.Writes);
+            Assert.IsFalse(Ravensight.IsEnabled);
+            Assert.IsNull(Ravensight.DeviceId);
+            Assert.AreEqual(RavensightReason.NoKey, Ravensight.StatusReason);
+            Assert.AreEqual(RavensightReason.NoKey, Ravensight.LastInitResult.Value.Reason);
+        }
+
+        [UnityTest]
+        public IEnumerator OptInSendsNothingUntilTheYesThenBootsInOrder()
+        {
+            RecordingTransport recorder = null;
+            Ravensight.TransportFactoryForTests = (runner, timeout) => recorder = new RecordingTransport(runner);
+            RavensightMemoryStorage storage = new RavensightMemoryStorage();
+            Ravensight.StorageForTests = storage;
+
+            Ravensight component = CreateComponent(null);
+#if UNITY_EDITOR
+            UnityEditor.SerializedObject fields = new UnityEditor.SerializedObject(component);
+            fields.FindProperty("consent").enumValueIndex = (int)RavensightConsent.OptIn;
+            fields.FindProperty("distribution").stringValue = "native-release";
+            fields.ApplyModifiedPropertiesWithoutUndo();
+#endif
+            _host.SetActive(true);
+            yield return null;
+            yield return null;
+
+            Assert.IsFalse(Ravensight.Track("before_yes"));
+            Assert.IsEmpty(recorder.Paths);
+            Assert.AreEqual(0, storage.Writes);
+            Assert.IsNull(Ravensight.DeviceId);
+            Assert.IsFalse(Ravensight.IsTrackingEnabled);
+
+            Ravensight.SetTrackingEnabled(true);
+            Assert.IsTrue(Ravensight.Track("after_yes"));
+            yield return null; // Update boots the client now that it is active
+            yield return null;
+
+            CollectionAssert.AreEqual(new[] { "/settings", "/session", "/track/batch" }, recorder.Paths);
+            CollectionAssert.AreEqual(new[] { "game_started" }, recorder.FirstEvents);
+            Assert.IsTrue(Ravensight.IsEnabled);
+            Assert.IsTrue(Ravensight.IsTrackingEnabled);
+            Assert.AreEqual(1, storage.GetInt(RavensightClient.OptInKey, 0));
+            Assert.IsNotNull(Ravensight.DeviceId);
+        }
+
+        [UnityTest]
         public IEnumerator BootOverUnityWebRequestReachesALocalServerInOrder()
         {
             using (LocalServer server = LocalServer.Start())

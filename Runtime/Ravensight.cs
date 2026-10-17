@@ -38,8 +38,11 @@ namespace RealitySE
         [Tooltip("Host or base URL. Leave the default unless you self host. /api/v1 is appended.")]
         [SerializeField] private string apiUrl = RavensightClient.DefaultApiUrl;
 
-        [Tooltip("Your PUBLISHABLE ingest key (gt_live_...). Safe to ship in a client build: it can open sessions, read the tracking kill switch and read this game's design suggestions.")]
+        [Tooltip("Your PUBLISHABLE ingest key (gt_live_... or a public build's gt_pub_...). Safe to ship in a client build: it can open sessions, read the tracking kill switch and read this game's design suggestions. Empty makes the SDK inert: nothing is stored or sent.")]
         [SerializeField] private string ingestKey = "gt_live_your_ingest_key_here";
+
+        [Tooltip("Silences the one warning an inert start (no ingest key) logs. For public builds that ship without a key.")]
+        [SerializeField] private bool optional = false;
 
         [Tooltip("Leave empty to use Application.version.")]
         [SerializeField] private string gameVersion = "";
@@ -57,6 +60,12 @@ namespace RealitySE
         [Header("Behaviour")]
         [Tooltip("Start sending when the component wakes. Not saved: for the player's own choice use Ravensight.SetTrackingEnabled.")]
         [SerializeField] private bool enabledOnStart = true;
+
+        [Tooltip("Opt Out (default): on until the player opts out. Opt In: nothing is sent and no device id is made until Ravensight.SetTrackingEnabled(true).")]
+        [SerializeField] private RavensightConsent consent = RavensightConsent.OptOut;
+
+        [Tooltip("A short label sent on the session, such as native-release or web-demo. At most 40 characters. Empty sends none.")]
+        [SerializeField] private string distribution = "";
 
         [Tooltip("Send from play mode in the Unity Editor. Off by default so pressing Play does not create player sessions.")]
 #pragma warning disable 0414 // read only in the Editor; player builds never use it
@@ -168,14 +177,49 @@ namespace RealitySE
             }
         }
 
-        /// <summary>The player's saved choice. True unless they opted out.</summary>
+        /// <summary>
+        /// The player's saved choice, for the starting state of a settings
+        /// toggle. With Consent set to Opt Out: true unless they opted out.
+        /// With Opt In: true only once they said yes. While inert (no key) or
+        /// switched off, still the saved choice. Before the component exists
+        /// it reads the opt-out choice, since the consent mode is not known yet.
+        /// </summary>
         public static bool IsTrackingEnabled
         {
             get
             {
                 RavensightClient client = Client;
-                if (client != null) return !client.OptedOut;
-                return PlayerPrefs.GetInt(RavensightClient.TrackingEnabledKey, 1) != 0;
+                if (client != null && !client.IsInert) return !client.OptedOut;
+                RavensightConsent mode = Instance != null ? Instance.consent : RavensightConsent.OptOut;
+                return RavensightClient.ReadTrackingChoice(new RavensightPlayerPrefsStorage(), mode);
+            }
+        }
+
+        /// <summary>
+        /// True only while the SDK is running and collecting: it has a key and
+        /// nobody switched it off (the developer, the player, the server, or a
+        /// refused key). False before the component wakes. Use it to skip work
+        /// that only feeds analytics.
+        /// </summary>
+        public static bool IsEnabled
+        {
+            get
+            {
+                RavensightClient client = Client;
+                return client != null && client.IsEnabled;
+            }
+        }
+
+        /// <summary>
+        /// This install's random device id. Null before the component wakes,
+        /// while inert, and with Consent set to Opt In before the first yes.
+        /// </summary>
+        public static string DeviceId
+        {
+            get
+            {
+                RavensightClient client = Client;
+                return client == null ? null : client.DeviceId;
             }
         }
 
@@ -201,16 +245,35 @@ namespace RealitySE
         /// </summary>
         public static Ravensight Initialize(string ingestKey, string apiUrl, string gameVersion, bool enabled)
         {
+            RavensightOptions options = new RavensightOptions();
+            options.ApiUrl = apiUrl;
+            options.GameVersion = gameVersion;
+            options.Enabled = enabled;
+            return Initialize(ingestKey, options);
+        }
+
+        /// <summary>
+        /// Creates the singleton from code with the public build options:
+        /// consent mode, distribution label and Optional. A null or empty key
+        /// makes the SDK inert for the run (see the README's "Public builds").
+        /// Later calls return the existing instance without reconfiguring it.
+        /// </summary>
+        public static Ravensight Initialize(string ingestKey, RavensightOptions options)
+        {
             if (Instance != null) return Instance;
+            if (options == null) options = new RavensightOptions();
 
             // Inactive while configuring, so Awake runs with the fields set.
             GameObject host = new GameObject("Ravensight");
             host.SetActive(false);
             Ravensight instance = host.AddComponent<Ravensight>();
-            instance.ingestKey = ingestKey;
-            if (!string.IsNullOrEmpty(apiUrl)) instance.apiUrl = apiUrl;
-            if (!string.IsNullOrEmpty(gameVersion)) instance.gameVersion = gameVersion;
-            instance.enabledOnStart = enabled;
+            instance.ingestKey = ingestKey ?? "";
+            if (!string.IsNullOrEmpty(options.ApiUrl)) instance.apiUrl = options.ApiUrl;
+            if (!string.IsNullOrEmpty(options.GameVersion)) instance.gameVersion = options.GameVersion;
+            instance.enabledOnStart = options.Enabled;
+            instance.consent = options.Consent;
+            instance.distribution = options.Distribution ?? "";
+            instance.optional = options.Optional;
             host.SetActive(true);
             return instance;
         }
@@ -258,11 +321,12 @@ namespace RealitySE
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
-            if (string.IsNullOrEmpty(ingestKey) || ingestKey.StartsWith("gt_live_your_", StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(ingestKey) || ingestKey.Trim().Length == 0 ||
+                ingestKey.StartsWith("gt_live_your_", StringComparison.Ordinal))
             {
-                Debug.LogWarning("Ravensight: no ingest key set. Tracking is off. " +
-                                 "Set it in the Inspector or call Ravensight.Initialize(key).");
-                ClearPendingEvents();
+                // Inert: no PlayerPrefs read or write, no request, no flush
+                // timer. One warning unless Optional is ticked.
+                StartInert();
                 return;
             }
 
@@ -288,6 +352,9 @@ namespace RealitySE
             config.HoldDisabled = _editorHold;
             config.TrackLifecycleEvents = trackLifecycleEvents;
             config.SessionTimeoutSeconds = sessionTimeoutSeconds;
+            config.Consent = consent;
+            config.Distribution = distribution;
+            config.Optional = optional;
             config.Playtest = ResolvePlaytest();
             config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
 
@@ -325,6 +392,36 @@ namespace RealitySE
             ReplayPendingEvents();
         }
 
+        /// <summary>The no key start: a client that never touches storage or the network.</summary>
+        private void StartInert()
+        {
+            RavensightConfig config = new RavensightConfig();
+            config.IngestKey = null;
+            config.Optional = optional;
+            config.Consent = consent;
+            config.Enabled = false;
+            // Read or written only if the game calls SetTrackingEnabled, so the
+            // player's choice is still saved for a later build with a key.
+            config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
+            _client = new RavensightClient(config, new InertTransport(), null);
+            _client.Warn = message => Debug.LogWarning(message);
+            _client.ReportStartupProblems();
+            ClearPendingEvents();
+            RavensightInitResult result = new RavensightInitResult();
+            result.Reason = RavensightReason.NoKey;
+            LastInitResult = result;
+            RaiseStatusChanged(_client.StatusReason);
+        }
+
+        /// <summary>Never called: an inert client makes no request. Answers as a network failure if it ever were.</summary>
+        private sealed class InertTransport : IRavensightTransport
+        {
+            public Task<RavensightResponse> SendAsync(RavensightRequest request)
+            {
+                return Task.FromResult(RavensightResponse.NetworkFailure("inert"));
+            }
+        }
+
         private void Start()
         {
             // Not from Awake: the transport's coroutine runner is only usable
@@ -356,7 +453,7 @@ namespace RealitySE
 
         private void Update()
         {
-            if (_client == null) return;
+            if (_client == null || _client.IsInert) return;
 
             // A client that started disabled boots the first time it is enabled.
             if (!_booting && !_bootedWhileActive && _client.IsActive && !_client.SettingsChecked) Boot();
@@ -563,7 +660,9 @@ namespace RealitySE
                 Debug.Log("Ravensight: SetTrackingEnabled is ignored during a playtest run.");
                 return;
             }
-            RavensightClient.WriteTrackingChoice(new RavensightPlayerPrefsStorage(), on);
+            // The consent mode is not known before the component exists, so a
+            // yes is saved in the form both modes read.
+            RavensightClient.WriteTrackingChoice(new RavensightPlayerPrefsStorage(), on, RavensightConsent.OptIn);
             if (!on) ClearPendingEvents();
         }
 
@@ -649,5 +748,22 @@ namespace RealitySE
                 if (t.Exception != null) Debug.LogWarning("Ravensight: request failed (" + t.Exception.Message + ")");
             }, TaskContinuationOptions.OnlyOnFaulted);
         }
+    }
+
+    /// <summary>Options for <see cref="Ravensight.Initialize(string, RavensightOptions)"/>.</summary>
+    public sealed class RavensightOptions
+    {
+        /// <summary>Host or base URL. Null keeps the default.</summary>
+        public string ApiUrl;
+        /// <summary>Null uses Application.version.</summary>
+        public string GameVersion;
+        /// <summary>The developer's start switch, not saved.</summary>
+        public bool Enabled = true;
+        /// <summary>OptOut (default) or OptIn.</summary>
+        public RavensightConsent Consent = RavensightConsent.OptOut;
+        /// <summary>A short label sent on the session, such as "native-release". Null sends none.</summary>
+        public string Distribution;
+        /// <summary>True silences the one warning an inert start (no key) logs.</summary>
+        public bool Optional;
     }
 }
