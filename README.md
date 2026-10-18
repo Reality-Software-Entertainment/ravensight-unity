@@ -19,8 +19,11 @@ dependencies.
 
 ## Verification status
 
-The combined public-build and typed-event candidate is being verified locally.
-The checks below describe the earlier public-build verification; see the release evidence for the combined candidate.
+Version 0.3.1 passes 119 .NET core tests, and its Runtime sources compile against
+Unity 6000.6.5f1 assemblies. A fresh Editor test run was blocked by local license
+initialization, so the checks below describe earlier public-build verification.
+See [release validation](HELD_RELEASE_VALIDATION.md) for the versioned evidence
+and remaining device, Editor and live-storage limits.
 
 * **Editor import and compile.** The package was added to a fresh project as a
   local package and as a git dependency. Both assemblies (`RealitySE.Ravensight`
