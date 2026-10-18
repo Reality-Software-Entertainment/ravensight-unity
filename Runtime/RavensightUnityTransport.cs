@@ -73,11 +73,12 @@ namespace RealitySE
             try
             {
                 www = new UnityWebRequest(request.Url, request.Method);
+                if (request.NoRedirect) www.redirectLimit = 0;
                 www.downloadHandler = new DownloadHandlerBuffer();
 
-                if (!string.IsNullOrEmpty(request.Body))
+                if (request.RawBody != null || !string.IsNullOrEmpty(request.Body))
                 {
-                    byte[] payload = Encoding.UTF8.GetBytes(request.Body);
+                    byte[] payload = request.RawBody ?? Encoding.UTF8.GetBytes(request.Body);
                     UploadHandlerRaw upload = new UploadHandlerRaw(payload);
                     upload.contentType = "application/json";
                     www.uploadHandler = upload;

@@ -16,6 +16,8 @@ namespace RealitySE
         public string Url;
         /// <summary>Serialized JSON body, or null for a GET.</summary>
         public string Body;
+        public byte[] RawBody;
+        public bool NoRedirect;
         public Dictionary<string, string> Headers = new Dictionary<string, string>();
 
         public RavensightRequest(string method, string url, string body)
@@ -41,6 +43,8 @@ namespace RealitySE
     {
         public int Status;
         public string Body;
+        public byte[] RawBody;
+        public bool NoRedirect;
         /// <summary>Raw Retry-After header value, or null.</summary>
         public string RetryAfter;
 

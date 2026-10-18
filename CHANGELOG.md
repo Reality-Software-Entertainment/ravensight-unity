@@ -35,6 +35,8 @@ the changes listed first.
 
 ### Added
 
+- Screenshot Player Reports with session-bound retry identity and credential-free presigned multipart uploads.
+
 * Declared the Unity Web Request module dependency so installation also compiles in minimal projects.
 
 * **Inert without a key.** An empty Ingest Key (or `Ravensight.Initialize`

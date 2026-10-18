@@ -698,6 +698,13 @@ namespace RealitySE
             return client.SubmitFeedbackAsync(message, category, rating);
         }
 
+        public static Task<RavensightReportReceipt> SubmitReport(RavensightReport report)
+        {
+            var client = Client;
+            if (client == null) throw new InvalidOperationException("Ravensight is not initialized.");
+            return client.SubmitReportAsync(report);
+        }
+
         public static Task SubmitFeedback(string message)
         {
             return SubmitFeedback(message, null, 0);

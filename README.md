@@ -667,3 +667,28 @@ exposure tags are discarded. Config-ready fires after a completed refresh,
 including offline fallback. Inspect the returned boolean to distinguish a
 successful fresh/304 response from offline fallback. Responses are bounded to
 50 keys, 8 KB per value, 20 nested levels and 10 experiments.
+
+
+## Screenshot Player Reports
+
+```csharp
+// Redact first. EncodeToPNG() is a Unity Texture2D method; capture is application-owned.
+var report = new RealitySE.RavensightReport("The door is stuck", texture.EncodeToPNG());
+var receipt = await RealitySE.Ravensight.SubmitReport(report);
+if (!receipt.Complete) {
+    // Pending/processing is not success. Retain report and retry it later.
+    receipt = await RealitySE.Ravensight.SubmitReport(report);
+}
+```
+
+The helper accepts PNG only, at most 1,000,000 bytes and 4 million pixels. It
+copies bytes, generates the client ID and capture time once, and uses the active
+SDK session. Presigned HTTPS multipart uploads carry no SDK key or session token
+and do not follow redirects. The server validates/sanitizes the image. A returned
+`pending` or `processing` receipt needs another explicit attempt with the same
+report object; exceptions are surfaced with no automatic text fallback. Do not
+construct a replacement object to retry an uncertain request. Session/device or
+endpoint changes and consent revocation stop retries instead of rebinding them.
+Retry state is memory-only. Screenshot reports reserve 20,001 weighted events;
+text-only reports use 1. Unfinished reservations expire server-side. No screenshot
+is captured automatically and no image-analysis claim is implied.

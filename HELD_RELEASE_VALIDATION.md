@@ -37,3 +37,5 @@ Config identifier compatibility audit: 7 focused .NET config tests passed; no pr
 Config property keys reject constructor/prototype, including nested JSON properties.
 Experiment keys and variant labels may use those words as string values, matching
 the server contract. Regression coverage distinguishes those cases. Publishing remains held.
+
+Screenshot Player Reports: 119 .NET core tests passed. All Runtime C# sources, including the facade and UnityWebRequest transport, compile against installed Unity 6000.6.5f1 assemblies with C# 7.3, zero warnings/errors. Unity EditMode execution attempted but blocked by local license initialization timeout; this is not an Editor execution pass. No live storage provider or physical-device screenshot run was performed. Existing held 0.3.1 candidate now includes this feature; no tag, push or publication occurred.
