@@ -32,3 +32,8 @@ client initialization timed out; it did not produce a test result. The earlier
 110 EditMode / 6 PlayMode results above do not validate this new change. Real
 service/device tests and a fresh Unity Test Runner run remain outstanding.
 No push, tag, publication or deployment performed.
+
+Config identifier compatibility audit: 7 focused .NET config tests passed; no production validator change was needed.
+Config property keys reject constructor/prototype, including nested JSON properties.
+Experiment keys and variant labels may use those words as string values, matching
+the server contract. Regression coverage distinguishes those cases. Publishing remains held.

@@ -57,6 +57,19 @@ namespace RealitySE.Tests
             delayed = new TaskCompletionSource<RavensightResponse>(); request = c.FetchConfigAsync(); c.SetTrackingEnabled(false); c.SetTrackingEnabled(true);
             delayed.SetResult(FakeTransport.Json(200, Document())); Assert.False(await request);
         }
+        [Fact] public async Task ReservedPropertiesRemainForbiddenButExperimentLabelsAreValues()
+        {
+            var h = new Harness(); var t = new Transport(); var c = new RavensightClient(h.Config(), t, h.Clock.Now);
+            foreach (string word in new[] { "constructor", "prototype" })
+            {
+                t.Reply = r => Task.FromResult(FakeTransport.Json(200, Document("{\"" + word + "\":1}")));
+                Assert.False(await c.FetchConfigAsync());
+                t.Reply = r => Task.FromResult(FakeTransport.Json(200, Document("{\"nested\":{\"" + word + "\":1}}")));
+                Assert.False(await c.FetchConfigAsync());
+                t.Reply = r => Task.FromResult(FakeTransport.Json(200, Document("{}", "[{\"key\":\"" + word + "\",\"variant\":\"" + word + "\"}]")));
+                Assert.True(await c.FetchConfigAsync());
+            }
+        }
         [Fact] public async Task InvalidDocumentsAreAtomicAndRefusalsClearCache()
         {
             var h = new Harness(); var t = new Transport(); var c = new RavensightClient(h.Config(), t, h.Clock.Now); await c.FetchConfigAsync();
