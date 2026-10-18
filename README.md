@@ -637,3 +637,33 @@ listed in `testables`, so they never reach your game or your build.
 ## License
 
 MIT. Copyright 2026 Reality Software Entertainment.
+
+## Remote config and experiments
+
+Version 0.3.1 fetches public configuration when a session opens. Use defaults
+immediately and subscribe before initialization to refresh your game UI:
+
+```csharp
+Ravensight.ConfigReady += () => {
+    double speed = Ravensight.GetConfigNumber("speed", 1.0);
+    bool enabled = Ravensight.GetConfigBool("tutorial", true);
+    string title = Ravensight.GetConfigString("title", "Welcome");
+};
+// Optional manual refresh; no polling is necessary.
+await Ravensight.FetchConfig();
+```
+
+`GetConfigJson(key, fallback)` returns a defensive copy of object/array values.
+Getters never coerce strings into booleans or numbers. Keep secrets out of config;
+these values are public game settings. A fresh fetch costs one event; unchanged
+responses send the exact cached ETag and return a free 304. Offline failures keep
+validated cache scoped to API host, ingest key, device, platform and game version.
+Opt-out clears this cache, and reset or late responses cannot restore the old
+identity's values. Inactive clients return your defaults and send no requests.
+
+Active experiments automatically add `rs_exp_<key>` to newly queued events.
+Already queued events retain their original exposure tags; caller-supplied
+exposure tags are discarded. Config-ready fires after a completed refresh,
+including offline fallback. Inspect the returned boolean to distinguish a
+successful fresh/304 response from offline fallback. Responses are bounded to
+50 keys, 8 KB per value, 20 nested levels and 10 experiments.

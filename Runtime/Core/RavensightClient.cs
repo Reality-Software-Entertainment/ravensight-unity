@@ -174,9 +174,9 @@ namespace RealitySE
     /// Game code normally uses the Ravensight MonoBehaviour rather than this
     /// class directly.
     /// </summary>
-    public sealed class RavensightClient
+    public sealed partial class RavensightClient
     {
-        public const string SdkVersion = "0.3.0";
+        public const string SdkVersion = "0.3.1";
         /// <summary>The bare host. "/api/v1" is appended by <see cref="NormalizeApiUrl"/>.</summary>
         public const string DefaultApiUrl = "https://api.ravensight.io";
         /// <summary>Server hard limit on POST /track/batch.</summary>
@@ -556,7 +556,7 @@ namespace RealitySE
                 }
                 if (value == _enabled) return;
                 _enabled = value;
-                if (!value) ClearQueue();
+                if (!value) { ClearConfig(true); ClearQueue(); }
                 SetStatus(null);
                 if (value) QueueGameStarted();
             }
@@ -647,6 +647,7 @@ namespace RealitySE
             _optedOut = !on;
             if (!on)
             {
+                ClearConfig(true);
                 // The device id is kept; ResetDeviceId forgets it.
                 ClearQueue();
                 _backgroundedAtMs = 0;
@@ -677,6 +678,7 @@ namespace RealitySE
             {
                 // Inert, or opt-in without a current yes: forget a saved id
                 // and make none. The next yes makes a fresh one.
+                ClearConfig(true);
                 _storage.DeleteKey(DeviceIdKey);
                 _storage.DeleteKey(BackgroundMarkerKey);
                 _storage.Save();
@@ -690,6 +692,7 @@ namespace RealitySE
                 return null;
             }
 
+            ClearConfig(true);
             DeviceId = ResetStoredDeviceId(_storage);
             ClearQueue();
             InvalidateSession();
@@ -847,6 +850,7 @@ namespace RealitySE
         public void Dispose()
         {
             _disposed = true;
+            ClearConfig(false);
             lock (_gate)
             {
                 _queue.Clear();
@@ -959,6 +963,7 @@ namespace RealitySE
             RavensightEvent evt = new RavensightEvent();
             evt.Name = eventName;
             evt.Data = WithPlaytestTags(data);
+            AddExposureTags(evt.Data);
             evt.Data[EventIdKey] = NextEventId();
             evt.Timestamp = timestampSeconds;
 
@@ -1445,6 +1450,7 @@ namespace RealitySE
                     ResetBackoff();
                     SetStatus(null);
                     Emit("session ready");
+                    await FetchConfigAsync();
                     return token;
                 }
 
@@ -1615,6 +1621,7 @@ namespace RealitySE
         private void DisableTracking()
         {
             TrackingEnabled = false;
+            ClearConfig(true);
             ClearQueue();
             SetStatus(null);
             WarnOnce("tracking_disabled", "Ravensight: tracking is switched off for this game on the server, nothing is sent this run.");
@@ -1627,6 +1634,7 @@ namespace RealitySE
         private void RefuseKey()
         {
             _invalidKey = true;
+            ClearConfig(true);
             SetStatus(RavensightReason.InvalidKey);
             WarnOnce("invalid_key", InvalidKeyWarning);
         }
@@ -1641,11 +1649,13 @@ namespace RealitySE
         private void EndRunForKey()
         {
             _invalidKey = true;
+            ClearConfig(true);
             StopForRun(RavensightReason.InvalidKey, InvalidKeyWarning);
         }
 
         private void StopForRun(string reason, string message)
         {
+            ClearConfig(true);
             if (_fatalReason == null) _fatalReason = reason;
             ClearQueue();
             SetStatus(null);

@@ -1,3 +1,8 @@
+## 0.3.1 (held)
+
+* Add session-start remote config, scoped ETag/offline cache, strict typed getters and config-ready notification.
+* Tag new events with active experiment assignments; isolate consent and identity changes from stale responses.
+
 # Changelog
 
 All notable changes to this package are documented here.

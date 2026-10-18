@@ -176,6 +176,7 @@ namespace RealitySE
                 int index = 0;
                 object value = ParseValue(text, ref index, 0);
                 SkipWhitespace(text, ref index);
+                if (index != text.Length) return null;
                 return value;
             }
             catch (FormatException)

@@ -182,10 +182,10 @@ namespace RealitySE.Tests
             RavensightInitResult init = await client.InitAsync();
 
             Assert.Equal(
-                new[] { "/track/batch", "/settings", "/session", "/track/batch" },
-                h.Transport.Requests.Select(FakeTransport.PathOf));
+                new[] { "/track/batch", "/settings", "/session", "/ingest/config", "/track/batch" },
+                h.Transport.Requests.Select(r => FakeTransport.PathOf(r).Split('?')[0]));
             Assert.Equal("old_tok", h.Transport.Requests[0].Headers["X-Session-Token"]);
-            Assert.Equal("game_started", FakeTransport.EventsOf(h.Transport.Requests[3]).Single()["event"]);
+            Assert.Equal("game_started", FakeTransport.EventsOf(h.Transport.To("/track/batch").Last()).Single()["event"]);
             Assert.True(init.SessionReady);
             Assert.Null(init.Reason);
         }

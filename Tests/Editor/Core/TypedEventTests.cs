@@ -394,7 +394,7 @@ namespace RealitySE.Tests
             Dictionary<string, object> body = FakeTransport.BodyOf(h.Transport.To("/session")[0]);
 
             Assert.Equal("unity/" + RavensightClient.SdkVersion, (string)body["sdk"]);
-            Assert.Equal("0.3.0", RavensightClient.SdkVersion);
+            Assert.Equal("0.3.1", RavensightClient.SdkVersion);
         }
     }
 }

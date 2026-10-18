@@ -154,6 +154,7 @@ namespace RealitySE
 
         /// <summary>Raised on the main thread with the new <see cref="StatusReason"/> whenever it changes.</summary>
         public static event Action<string> StatusChanged;
+        public static event Action ConfigReady;
 
         /// <summary>What the startup check found, or null until it has finished.</summary>
         public static RavensightInitResult? LastInitResult { get; private set; }
@@ -233,6 +234,7 @@ namespace RealitySE
             // Play mode without a domain reload keeps statics; start clean.
             Instance = null;
             StatusChanged = null;
+            ConfigReady = null;
             LastInitResult = null;
             _pendingEnabled = null;
             _explicitPlaytest = null;
@@ -383,6 +385,7 @@ namespace RealitySE
                 _client.Log = message => Debug.Log("[Ravensight] " + message);
             }
             _client.StatusChanged += RaiseStatusChanged;
+            _client.ConfigReady += () => { if (ConfigReady != null) ConfigReady(); };
             _client.ReportStartupProblems();
             if (_client.StatusReason != null) RaiseStatusChanged(_client.StatusReason);
 
@@ -699,6 +702,12 @@ namespace RealitySE
         {
             return SubmitFeedback(message, null, 0);
         }
+
+        public static Task<bool> FetchConfig() { return Client == null ? Task.FromResult(false) : Client.FetchConfigAsync(); }
+        public static string GetConfigString(string key, string fallback) { return Client == null ? fallback : Client.GetConfigString(key, fallback); }
+        public static bool GetConfigBool(string key, bool fallback) { return Client == null ? fallback : Client.GetConfigBool(key, fallback); }
+        public static double GetConfigNumber(string key, double fallback) { return Client == null ? fallback : Client.GetConfigNumber(key, fallback); }
+        public static object GetConfigJson(string key, object fallback) { return Client == null ? fallback : Client.GetConfigJson(key, fallback); }
 
         /// <summary>
         /// EXPERIMENTAL. AI generated design suggestions for this game. An
