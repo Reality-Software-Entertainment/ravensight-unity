@@ -465,28 +465,35 @@ namespace RealitySE.Tests
         // --- Error events behind gameplay -----------------------------------------------
 
         [Fact]
-        public async Task GameplayQueuesAheadOfErrorsAndAFullQueueEvictsErrorsFirst()
+        public async Task ACaptureIsWrittenAtOnceAndKeepsItsPlaceBehindGameplayAfterARestart()
         {
+            string dir = TempDir();
             Harness h = new Harness();
             h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
             RavensightConfig config = h.Config();
             config.TrackLifecycleEvents = false;
-            config.MaxQueueSize = 4;
+            config.QueueDirectory = dir;
             RavensightClient client = await h.Started(config);
-            client.Track("ev_0");
-            client.TrackError("error", "one");
-            client.TrackError("error", "two");
-            client.Track("ev_1");
-            client.Track("ev_2");
-            h.Clock.Advance(600000);
-            await client.FlushAsync();
-            List<string> order = FakeTransport.EventsOf(h.Transport.To("/track/batch").Last())
-                .Select(e => (string)e["event"] == "error" ? (string)RavensightJson.AsObject(e["data"])["rs_message"] : (string)e["event"]).ToList();
-            Assert.Equal(new[] { "ev_0", "ev_1", "ev_2", "two" }, order.ToArray());
-            Assert.Equal(1, client.Stats.Dropped);
+            RavensightLogEntry entry = new RavensightLogEntry();
+            entry.Level = RavensightLogLevel.Exception;
+            entry.Text = "Exception: boom";
+            Assert.True(client.ProcessLog(entry));
+            // Written at once, inside the one second write interval.
+            Assert.True(File.ReadAllText(client.QueueFilePath).Contains("\"auto\":true"));
+            client.Dispose();
 
-            client.Track("ev_3");
-            Assert.False(client.TrackError("error", "three"), "no error to evict: the incoming error is dropped");
+            Harness next = new Harness();
+            next.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
+            RavensightConfig again = next.Config();
+            again.TrackLifecycleEvents = false;
+            again.QueueDirectory = dir;
+            RavensightClient relaunched = await next.Started(again);
+            relaunched.Track("play");
+            relaunched.PersistNow();
+            string text = File.ReadAllText(relaunched.QueueFilePath);
+            Assert.True(text.IndexOf("\"play\"", StringComparison.Ordinal) < text.IndexOf("\"error\"", StringComparison.Ordinal),
+                "gameplay goes ahead of the restored capture");
+            Directory.Delete(dir, true);
         }
 
         [Fact]
@@ -504,7 +511,10 @@ namespace RealitySE.Tests
             config.TrackLifecycleEvents = false;
             client = h.Client(config);
             client.Begin();
-            client.TrackError("error", "first");
+            RavensightLogEntry first = new RavensightLogEntry();
+            first.Level = RavensightLogLevel.Exception;
+            first.Text = "Exception: first";
+            client.ProcessLog(first);
             await client.InitAsync();
             await client.FlushAsync();
             Assert.Equal(new[] { "error", "late" }, h.Transport.SentEventNames().ToArray());

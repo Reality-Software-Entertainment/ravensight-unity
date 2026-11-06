@@ -131,46 +131,31 @@ namespace RealitySE
         }
 
         /// <summary>
-        /// The queue's two ordering rules, called under _gate. A gameplay event
-        /// goes ahead of every queued error event, never inside a batch
-        /// awaiting an answer. A full queue evicts the oldest queued error
-        /// first, then the oldest event; an incoming error with no error to
-        /// evict is the one dropped (returns false).
+        /// The 0.4.0 queue rules, called under _gate, keyed on the automatic
+        /// capture flag: gameplay events go ahead of queued captures (never
+        /// ahead of a batch in flight), and a full queue evicts a capture before
+        /// any gameplay event; a capture that would evict gameplay is itself
+        /// dropped (returns false).
         /// </summary>
         private bool EnqueueOrdered(RavensightEvent evt)
         {
             int cap = _config.MaxQueueSize > 0 ? _config.MaxQueueSize : DefaultQueueCap;
             while (_queue.Count >= cap)
             {
-                int victim = FirstQueuedError();
-                if (victim >= 0)
+                int evict = FirstCapturedIndex(0);
+                if (evict < 0)
                 {
-                    _queue.RemoveAt(victim);
+                    if (evt.Captured) return false;
+                    evict = 0; // drop oldest so the newest always survive
                 }
-                else if (evt.IsError)
-                {
-                    return false;
-                }
-                else
-                {
-                    _queue.RemoveAt(0); // drop oldest so the newest always survive
-                    if (_inflightCount > 0) _inflightCount--;
-                }
+                _queue.RemoveAt(evict);
                 _stats.Dropped++;
+                if (evict < _inflightCount) _inflightCount--;
             }
-            int at = evt.IsError ? -1 : FirstQueuedError();
-            if (at >= 0) _queue.Insert(at, evt);
-            else _queue.Add(evt);
+            int at = evt.Captured ? -1 : FirstCapturedIndex(_inflightCount);
+            if (at < 0) _queue.Add(evt);
+            else _queue.Insert(at, evt);
             return true;
-        }
-
-        private int FirstQueuedError()
-        {
-            for (int i = Math.Min(_inflightCount, _queue.Count); i < _queue.Count; i++)
-            {
-                if (_queue[i].IsError) return i;
-            }
-            return -1;
         }
 
         private void QueueExitWithOrigin(long timestampMs, Dictionary<string, object> origin)

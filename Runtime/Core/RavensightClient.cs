@@ -71,15 +71,8 @@ namespace RealitySE
         /// </summary>
         public Dictionary<string, object> Origin;
 
-        /// <summary>A typed error event (rs_kind "error"): it queues behind gameplay and is evicted first.</summary>
-        public bool IsError
-        {
-            get
-            {
-                object kind;
-                return Data != null && Data.TryGetValue("rs_kind", out kind) && (kind as string) == "error";
-            }
-        }
+        /// <summary>An automatic error capture: queued behind gameplay events and evicted first.</summary>
+        internal bool Captured;
 
         public Dictionary<string, object> ToPayload()
         {
@@ -158,6 +151,12 @@ namespace RealitySE
         /// and one <c>health</c> event is sent per session.
         /// </summary>
         public bool Performance;
+        /// <summary>
+        /// Automatic error capture, on by default. It still runs only with a
+        /// key, consent and the game's errorCapture switch on the server.
+        /// False opts the game out; manual TrackError is unaffected.
+        /// </summary>
+        public bool ErrorCapture = true;
         /// <summary>The playtest run, or null for a real player.</summary>
         public RavensightPlaytestContext Playtest;
         /// <summary>Persistent storage. Null keeps everything in memory.</summary>
@@ -215,7 +214,7 @@ namespace RealitySE
     /// </summary>
     public sealed partial class RavensightClient
     {
-        public const string SdkVersion = "0.3.1";
+        public const string SdkVersion = "0.4.0";
         /// <summary>The bare host. "/api/v1" is appended by <see cref="NormalizeApiUrl"/>.</summary>
         public const string DefaultApiUrl = "https://api.ravensight.io";
         /// <summary>Server hard limit on POST /track/batch.</summary>
@@ -331,6 +330,8 @@ namespace RealitySE
             _storage = config.Storage ?? new RavensightMemoryStorage();
             _random = config.Random ?? SharedRandom;
             _startSeconds = _nowMs() / 1000L;
+            _errorCaptureOn = config.ErrorCapture;
+            _errors.Reset(_nowMs());
 
             ApiUrl = NormalizeApiUrl(config.ApiUrl);
             TrackingEnabled = true;
@@ -826,6 +827,7 @@ namespace RealitySE
             _gameExitedQueued = false;
             _healthSent = false;
             _frames.Reset();
+            ResetErrorSession();
             // Queued before any await so it leads the new session.
             QueueGameStarted();
 
@@ -1015,9 +1017,23 @@ namespace RealitySE
         {
             if (string.IsNullOrEmpty(eventName)) throw new ArgumentException("event name is required", "eventName");
             if (!IsActive) return false;
+            TrailEvent(eventName);
+            return Enqueue(eventName, data, timestampMs, false);
+        }
+
+        /// <summary>
+        /// Queues one event. Gameplay events go ahead of any queued automatic
+        /// error captures (never ahead of a batch in flight), and when the
+        /// queue is full a capture is evicted before any gameplay event; a
+        /// capture that would evict gameplay is itself dropped.
+        /// </summary>
+        private bool Enqueue(string eventName, Dictionary<string, object> data, long timestampMs, bool captured)
+        {
+            if (!IsActive) return false;
 
             RavensightEvent evt = new RavensightEvent();
             evt.Name = eventName;
+            evt.Captured = captured;
             evt.Data = WithPlaytestTags(data);
             AddExposureTags(evt.Data);
             evt.Data[EventIdKey] = NextEventId();
@@ -1044,10 +1060,22 @@ namespace RealitySE
                 }
                 count = _queue.Count;
             }
-            PersistSoon();
+            // A capture may come just before the process ends: written at once.
+            if (captured) PersistNow();
+            else PersistSoon();
 
             if (count >= MaxBatchSize) Observe(FlushCoreAsync(false, true));
             return true;
+        }
+
+        /// <summary>The first queued automatic capture at or after start, or -1. Call under the gate.</summary>
+        private int FirstCapturedIndex(int start)
+        {
+            for (int i = Math.Max(0, start); i < _queue.Count; i++)
+            {
+                if (_queue[i].Captured) return i;
+            }
+            return -1;
         }
 
         /// <summary>A copy of the caller's data with the playtest tags, if any. Never the caller's own dictionary.</summary>
@@ -1474,6 +1502,7 @@ namespace RealitySE
             if (response.Status == 200 && RavensightJson.TryGetBool(response.Json(), "trackingEnabled", out enabled))
             {
                 if (!enabled) DisableTracking();
+                else ApplyErrorCaptureSettings(response.Json());
                 return;
             }
             if (response.Status == 401)
@@ -1568,6 +1597,7 @@ namespace RealitySE
                     _invalidKey = false;
                     ResetBackoff();
                     SetStatus(null);
+                    ApplyErrorCaptureSettings(parsed);
                     Emit("session ready");
                     await FetchConfigAsync();
                     return token;
@@ -1807,6 +1837,8 @@ namespace RealitySE
                 _inflightCount = 0;
             }
             PersistNow();
+            // Opt-out, reset, disable and a stopped run forget the trail and boot errors too.
+            ClearErrorTrail();
         }
 
         // --- Status -------------------------------------------------------------------

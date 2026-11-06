@@ -1,11 +1,10 @@
 ## Unreleased
 
 Follows the platform's SDK delivery, ads and attribution, exposure and device
-contracts. Automatic error capture is not in this change; it ships from the
-error capture branch. The server releases for them ship first; see "Server
+contracts. The server releases for them ship first; see "Server
 prerequisites".
 
-### Changes for 0.3.x games
+### Changes for 0.4.0 games
 
 * The queue is persisted by default in
   `Application.persistentDataPath/Ravensight/queue-<hash>.json`: version 2 of
@@ -26,11 +25,11 @@ prerequisites".
   the first typed config read in a session sends one `rs_exposure` and tags
   that session's later events. A well formed `rs_exp_<key>` of the game's own
   is kept (it was discarded).
-* Error events (`rs_kind` `error`) queue behind gameplay events and a full
-  queue evicts the oldest error first.
-
-### Added
-
+* The 0.4.0 queue rules for automatic captures hold in the persisted queue:
+  the capture flag is stored with each event, so a restored capture still
+  queues behind gameplay and is evicted first, and a capture is written to
+  the file at once. Captured errors are stamped in milliseconds like every
+  other event.
 * Origin replay: events carry the session they were tracked under; a saved exit
   whose session expired is queued under its origin.
 * gzip for batches of 1,024 bytes or more; request signing when the session
@@ -59,6 +58,51 @@ prerequisites".
 # Changelog
 
 All notable changes to this package are documented here.
+
+## [0.4.0] - 2026-11-06
+
+### Added
+
+* **Automatic error capture, on by default.** Exceptions Unity logs become
+  `error` events with `rs_source` `uncaught`; `Debug.LogError` and failed
+  asserts become `log` at `warning`. Unhandled `AppDomain` exceptions and
+  unobserved task exceptions are observed (never marked observed). Warnings
+  and log lines only feed the optional trail. The hooks run only with a key,
+  after consent, while the SDK is enabled and while the game's Errors switch
+  (`errorCapture.enabled` on the settings or session answer, absent means
+  on) is on. Boot errors before that answer are held, at most 5.
+* Device limits per session: 30 captures, 3 per error, 10 trails, 6 a
+  minute. Scrubbed on the device before queueing (emails, tokens, `gt_`
+  keys, long digit-bearing base64 or hex runs that are not file paths, IPs with a digit, home paths, URL credentials, query
+  and fragment; input cut to 4 times the field limit first). The SDK's own lines and stacks are never captured. Once the caps are spent an
+  error costs no scrub or key work, and the buffer between the hooks and the
+  main thread keeps a separate quota for errors so heavy logging cannot push
+  them out.
+* A home folder scrubs as the whole name, spaces included, and
+  `C:\Documents and Settings\<name>` is a home folder, with either slash
+  (scrub contract 5, vectors 6).
+* The trail: the last 20 lines, sent with a captured error only when the
+  game's `errorCapture.trail` is on.
+* `RavensightConfig.ErrorCapture`, `RavensightOptions.ErrorCapture`, an
+  **Error Capture** Inspector field, `Ravensight.SetErrorCapture(bool)` and
+  `Ravensight.IsErrorCaptureActive`.
+* Tests: `Tests/Editor/Core/ErrorCaptureTests.cs` (43 cases, including the shared `scrub-vectors.json` fixture).
+
+### Changed
+
+* Gameplay events are queued ahead of captured errors, and a full queue
+  drops a captured error before any gameplay event.
+* A `413` answer to a batch is handled like a `400`: split, then drop the
+  one event the server refuses.
+
+### Verified
+
+* 162 .NET Core tests pass, and `Runtime/Core` compiles as C# 7.3 for
+  netstandard2.0, both on the .NET 8 SDK that ships inside Unity 6000.6.5f1.
+  All Runtime sources compile against the Unity 6000.6.5f1 engine assemblies
+  with zero warnings.
+* Not run: the Unity Editor (EditMode or PlayMode), a player build, or a
+  real error against a local API. The hooks themselves are parse only.
 
 ## [0.3.0] - 2026-10-16
 

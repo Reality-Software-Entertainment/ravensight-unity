@@ -88,6 +88,9 @@ namespace RealitySE
         [Tooltip("Keep the queue in a file under Application.persistentDataPath, so events survive a crash, a kill or a lost network and are sent on the next launch. On by default.")]
         [SerializeField] private bool persistQueue = true;
 
+        [Tooltip("Automatic error capture: exceptions, Debug.LogError and asserts become error events. On by default; it still runs only with a key, the player's consent and the game's Errors switch on the server. Untick to opt the game out. Ravensight.TrackError is unaffected.")]
+        [SerializeField] private bool errorCapture = true;
+
         [Tooltip("Log SDK activity to the Unity console. Warnings that need your attention are always logged.")]
         [SerializeField] private bool verboseLogging = false;
 
@@ -99,6 +102,7 @@ namespace RealitySE
         private bool _quitting;
         private bool _quitHeld;
         private double _bootMs;
+        private RavensightErrorHooks _errorHooks;
 
         private struct PendingEvent
         {
@@ -286,6 +290,7 @@ namespace RealitySE
             instance.consent = options.Consent;
             instance.distribution = options.Distribution ?? "";
             instance.optional = options.Optional;
+            instance.errorCapture = options.ErrorCapture;
             host.SetActive(true);
             return instance;
         }
@@ -368,6 +373,7 @@ namespace RealitySE
             config.Distribution = distribution;
             config.Optional = optional;
             config.Performance = performance;
+            config.ErrorCapture = errorCapture;
             config.Playtest = ResolvePlaytest();
             config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
             config.QueueDirectory = persistQueue ? QueueDirectoryForTests ?? DefaultQueueDirectory() : null;
@@ -411,6 +417,12 @@ namespace RealitySE
             _bootMs = Time.realtimeSinceStartup * 1000.0;
             _client.Begin();
             ReplayPendingEvents();
+
+            // With a key and consent the hooks go in now, so errors during
+            // boot are held (at most 5) until the settings or session answer
+            // says whether the game wants them.
+            _errorHooks = new RavensightErrorHooks();
+            _errorHooks.Update(_client);
         }
 
         private static string DefaultQueueDirectory()
@@ -501,6 +513,10 @@ namespace RealitySE
         private void Update()
         {
             if (_client == null || _client.IsInert) return;
+
+            // Installs or removes the error hooks to match the gate, and turns
+            // what they buffered on any thread into events, here on the main thread.
+            if (_errorHooks != null) _errorHooks.Update(_client);
 
             // A client that started disabled boots the first time it is enabled.
             if (!_booting && !_bootedWhileActive && _client.IsActive && !_client.SettingsChecked) Boot();
@@ -620,6 +636,7 @@ namespace RealitySE
             Application.wantsToQuit -= OnWantsToQuit;
 #endif
             Instance = null;
+            if (_errorHooks != null) _errorHooks.Uninstall();
             // On quit the queue is left alone so the last send is not cut short.
             if (_client != null && !_quitting) _client.Dispose();
         }
@@ -756,6 +773,31 @@ namespace RealitySE
         {
             RavensightClient client = Client;
             return client != null && client.SetAttribution(source, network, campaign, adset, creative, touchTimeMs);
+        }
+
+        /// <summary>
+        /// The game's runtime switch for automatic error capture, not saved.
+        /// Manual TrackError calls are unaffected. Called before the component
+        /// wakes, it does nothing: use the Inspector field or
+        /// RavensightOptions.ErrorCapture instead.
+        /// </summary>
+        public static void SetErrorCapture(bool on)
+        {
+            RavensightClient client = Client;
+            if (client != null) client.ErrorCaptureEnabled = on;
+        }
+
+        /// <summary>
+        /// True while automatic error capture runs: a key, consent, an active
+        /// SDK, the game's own switch and the server's Errors switch.
+        /// </summary>
+        public static bool IsErrorCaptureActive
+        {
+            get
+            {
+                RavensightClient client = Client;
+                return client != null && client.IsErrorCaptureActive;
+            }
         }
 
         /// <summary>
@@ -962,5 +1004,7 @@ namespace RealitySE
         public string Distribution;
         /// <summary>True silences the one warning an inert start (no key) logs.</summary>
         public bool Optional;
+        /// <summary>Automatic error capture, on by default. False opts the game out.</summary>
+        public bool ErrorCapture = true;
     }
 }

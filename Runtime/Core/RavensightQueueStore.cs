@@ -103,6 +103,8 @@ namespace RealitySE
                     evt.Data = data ?? new Dictionary<string, object>();
                     evt.Timestamp = timestamp;
                     evt.Origin = origin;
+                    bool captured;
+                    evt.Captured = RavensightJson.TryGetBool(entry, "auto", out captured) && captured;
                     result.Events.Add(evt);
                 }
             }
@@ -183,6 +185,7 @@ namespace RealitySE
                 entry["event"] = evt.Name;
                 entry["timestamp"] = evt.Timestamp;
                 entry["data"] = evt.Data ?? new Dictionary<string, object>();
+                if (evt.Captured) entry["auto"] = true;
                 ((List<object>)current["events"]).Add(entry);
             }
             Dictionary<string, object> root = new Dictionary<string, object>();
