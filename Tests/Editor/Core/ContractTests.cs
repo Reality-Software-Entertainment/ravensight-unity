@@ -464,6 +464,96 @@ namespace RealitySE.Tests
 
         // --- Error events behind gameplay -----------------------------------------------
 
+        private static RavensightLogEntry Thrown(string text)
+        {
+            RavensightLogEntry entry = new RavensightLogEntry();
+            entry.Level = RavensightLogLevel.Exception;
+            entry.Text = text;
+            entry.Stack = "Game.Run () (at Assets/" + text.Replace(" ", "").Replace(":", "") + ".cs:1)";
+            return entry;
+        }
+
+        [Fact]
+        public async Task Rule1GameplayGoesAheadOfCapturesAndTrackErrorIsGameplay()
+        {
+            Harness h = new Harness();
+            h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
+            RavensightConfig config = h.Config();
+            config.TrackLifecycleEvents = false;
+            RavensightClient client = await h.Started(config);
+            Assert.True(client.ProcessLog(Thrown("Exception: boom")));
+            client.Track("play");
+            client.TrackError("error", "own");
+            h.Clock.Advance(600000);
+            await client.FlushAsync();
+            List<string> order = FakeTransport.EventsOf(h.Transport.To("/track/batch").Last())
+                .Select(e => (string)e["event"] == "error" ? (string)RavensightJson.AsObject(e["data"])["rs_message"] : (string)e["event"]).ToList();
+            Assert.Equal(new[] { "play", "own", "boom" }, order.ToArray());
+        }
+
+        [Fact]
+        public async Task Rule2AnIncomingCaptureEvictsTheOldestCaptureOrIsDroppedNeverGameplay()
+        {
+            Harness h = new Harness();
+            h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
+            RavensightConfig config = h.Config();
+            config.TrackLifecycleEvents = false;
+            config.MaxQueueSize = 3;
+            RavensightClient client = await h.Started(config);
+            client.Track("a");
+            Assert.True(client.ProcessLog(Thrown("Exception: one")));
+            client.Track("b");
+            Assert.True(client.ProcessLog(Thrown("Exception: two")), "evicts the oldest capture");
+            Assert.Equal(3, client.QueueCount);
+            client.Track("c");
+            Assert.False(client.ProcessLog(Thrown("Exception: three")), "no capture to evict: dropped");
+            h.Clock.Advance(600000);
+            await client.FlushAsync();
+            Assert.Equal(new[] { "a", "b", "c" }, FakeTransport.EventsOf(h.Transport.To("/track/batch").Last()).Select(e => (string)e["event"]).ToArray());
+        }
+
+        [Fact]
+        public async Task Rule3NoTrailInTheFileAndOptOutAndResetDeleteCaptures()
+        {
+            string dir = TempDir();
+            Harness h = new Harness();
+            h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
+            RavensightConfig config = h.Config();
+            config.TrackLifecycleEvents = false;
+            config.QueueDirectory = dir;
+            RavensightClient client = await h.Started(config);
+            Dictionary<string, object> withTrail = new Dictionary<string, object>();
+            withTrail["rs_kind"] = "error";
+            withTrail["rs_trail"] = "+10 info secret line";
+            RavensightEvent evt = new RavensightEvent();
+            evt.Name = "error";
+            evt.Data = withTrail;
+            evt.Timestamp = h.Clock.NowMs;
+            evt.Captured = true;
+            RavensightQueueStore store = new RavensightQueueStore(dir, "gt_live_test");
+            Assert.True(store.Save(new List<RavensightEvent> { evt }));
+            string text = File.ReadAllText(store.FilePath);
+            Assert.False(text.Contains("rs_trail") || text.Contains("secret line"), "no trail on disk");
+            Assert.True(text.Contains("\"auto\":true"), "the flag is stored");
+            Assert.True(withTrail.ContainsKey("rs_trail"), "kept in memory");
+
+            File.WriteAllText(store.FilePath, text.Replace("\"rs_kind\":\"error\"", "\"rs_kind\":\"error\",\"rs_trail\":\"old\""));
+            RavensightQueueStore.LoadResult loaded = store.Load(h.Clock.NowMs);
+            Assert.False(loaded.Events[0].Data.ContainsKey("rs_trail"), "dropped from a restored capture");
+            Assert.True(loaded.Events[0].Captured);
+
+            Assert.True(client.ProcessLog(Thrown("Exception: boom")));
+            client.ResetDeviceId();
+            Assert.False(File.Exists(client.QueueFilePath) && File.ReadAllText(client.QueueFilePath).Contains("boom"), "id reset deletes it");
+
+            Assert.True(client.ProcessLog(Thrown("Exception: again")));
+            client.PersistNow();
+            Assert.True(File.Exists(client.QueueFilePath));
+            client.SetTrackingEnabled(false);
+            Assert.False(File.Exists(client.QueueFilePath), "opt-out deletes it");
+            Directory.Delete(dir, true);
+        }
+
         [Fact]
         public async Task ACaptureIsWrittenAtOnceAndKeepsItsPlaceBehindGameplayAfterARestart()
         {

@@ -405,8 +405,10 @@ session, `origin`; feedback sends `message` and the optional `category` and
   origin too. The origin is kept only in the queue file and never logged.
 * **Errors behind gameplay.** Automatically captured errors queue behind
   gameplay events, never inside a batch awaiting an answer, and a full queue
-  evicts a capture before any gameplay event. The flag is kept in the queue
-  file, so the rule holds after a restart, and a capture is written at once.
+  evicts a capture before any gameplay event; an incoming capture with no
+  capture to evict is dropped. The flag is kept in the queue file, so the
+  rule holds after a restart, and a capture is written at once, without its
+  `rs_trail`, which stays in memory only.
 * **Removed only once delivered.** Events leave the queue, and the file, only
   after a `2xx`, or a `400` that names them by `index`.
 * **Answers.** A `400` with `index` drops that event and resends the rest;

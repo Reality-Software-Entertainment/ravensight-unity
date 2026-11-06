@@ -25,11 +25,12 @@ prerequisites".
   the first typed config read in a session sends one `rs_exposure` and tags
   that session's later events. A well formed `rs_exp_<key>` of the game's own
   is kept (it was discarded).
-* The 0.4.0 queue rules for automatic captures hold in the persisted queue:
-  the capture flag is stored with each event, so a restored capture still
-  queues behind gameplay and is evicted first, and a capture is written to
-  the file at once. Captured errors are stamped in milliseconds like every
-  other event.
+* The error queue rules every SDK shares hold in the persisted queue: the
+  capture flag is stored with each event, so a restored capture still queues
+  behind gameplay and is evicted first; `rs_trail` is never written to the
+  queue file (a restored capture has none); a capture is written to the file
+  at once; an opt-out and `ResetDeviceId` delete it. Captures are stamped in
+  milliseconds like every event.
 * Origin replay: events carry the session they were tracked under; a saved exit
   whose session expired is queued under its origin.
 * gzip for batches of 1,024 bytes or more; request signing when the session

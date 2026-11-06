@@ -21,6 +21,8 @@ namespace RealitySE
         /// <summary>Events older than this are dropped at load: the server refuses anything past 90 days.</summary>
         public const long MaxAgeMs = 89L * 86400L * 1000L;
         public const int FormatVersion = 2;
+        /// <summary>The capture trail: never written to the queue file.</summary>
+        public const string TrailKey = "rs_trail";
 
         private readonly object _gate = new object();
 
@@ -101,6 +103,8 @@ namespace RealitySE
                     RavensightEvent evt = new RavensightEvent();
                     evt.Name = name;
                     evt.Data = data ?? new Dictionary<string, object>();
+                    // A trail never comes back from the file, even from an older one.
+                    evt.Data.Remove(TrailKey);
                     evt.Timestamp = timestamp;
                     evt.Origin = origin;
                     bool captured;
@@ -184,7 +188,14 @@ namespace RealitySE
                 Dictionary<string, object> entry = new Dictionary<string, object>();
                 entry["event"] = evt.Name;
                 entry["timestamp"] = evt.Timestamp;
-                entry["data"] = evt.Data ?? new Dictionary<string, object>();
+                Dictionary<string, object> data = evt.Data ?? new Dictionary<string, object>();
+                if (data.ContainsKey(TrailKey))
+                {
+                    // A trail is never written to the queue file: it stays in memory only.
+                    data = new Dictionary<string, object>(data);
+                    data.Remove(TrailKey);
+                }
+                entry["data"] = data;
                 if (evt.Captured) entry["auto"] = true;
                 ((List<object>)current["events"]).Add(entry);
             }
