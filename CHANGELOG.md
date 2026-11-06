@@ -26,6 +26,8 @@ All notable changes to this package are documented here.
   error costs no scrub or key work, and the buffer between the hooks and the
   main thread keeps a separate quota for errors so heavy logging cannot push
   them out.
+* A home folder scrubs as the whole name, spaces included, and
+  `C:\Documents and Settings\<name>` is a home folder (scrub contract 5).
 * The trail: the last 20 lines, sent with a captured error only when the
   game's `errorCapture.trail` is on.
 * `RavensightConfig.ErrorCapture`, `RavensightOptions.ErrorCapture`, an

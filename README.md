@@ -495,8 +495,9 @@ What is never sent: before queueing, the message and stack are scrubbed on
 the device. Emails become `[email]`; bearer tokens, JWTs, `gt_` keys and runs
 of 32 or more base64 or hex characters with a digit (other than a file path
 made of ordinary words) become `[token]`; IPv4
-and IPv6 addresses become `[ip]`; `/Users/<name>`, `/home/<name>` and
-`C:\Users\<name>` become `~`; URLs lose any `user:password@`, their query and fragment. An IPv6 match
+and IPv6 addresses become `[ip]`; `/Users/<name>`, `/home/<name>`,
+`C:\Users\<name>` and `C:\Documents and Settings\<name>` become `~`, the whole
+name, spaces included; URLs lose any `user:password@`, their query and fragment. An IPv6 match
 needs a digit, so `Face::Add` stays. Each field is cut to 4 times its limit
 before scrubbing, then the message to 200 characters and the stack to 2,000. Lines the SDK itself logs,
 and errors thrown from the SDK's own code, are never captured. Manual
