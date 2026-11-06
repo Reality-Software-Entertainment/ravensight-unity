@@ -377,6 +377,12 @@ namespace RealitySE
             config.Playtest = ResolvePlaytest();
             config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
             config.QueueDirectory = persistQueue ? QueueDirectoryForTests ?? DefaultQueueDirectory() : null;
+#if UNITY_IOS && !UNITY_EDITOR
+            // The queue holds origin stamps and scrubbed error captures: never
+            // in an iCloud or device backup. Set after every write, because
+            // each write replaces the file.
+            config.QueueFileWritten = path => UnityEngine.iOS.Device.SetNoBackupFlag(path);
+#endif
             // Only what Unity reports without a permission prompt; none is a
             // hardware identifier.
             config.DeviceModel = SafeSystemInfo(() => SystemInfo.deviceModel);

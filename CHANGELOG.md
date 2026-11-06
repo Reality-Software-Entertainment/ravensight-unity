@@ -44,6 +44,11 @@ prerequisites".
 * `device` on `POST /session`: `SystemInfo.deviceModel`, the version part of
   `SystemInfo.operatingSystem` and `SystemInfo.graphicsDeviceName`.
 
+* The queue file is excluded from iCloud and device backups on iOS after
+  every write; `RavensightConfig.QueueFileWritten` is the hook. The README
+  gives the Android Auto Backup rules a game adds.
+* A full queue never evicts a capture inside a batch in flight (0.4.0 could).
+
 ### Server prerequisites
 
 * `rs_exposure` must be in `SDK_AUTOMATIC_EVENTS` before release, or a public

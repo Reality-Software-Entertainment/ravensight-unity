@@ -513,6 +513,59 @@ namespace RealitySE.Tests
         }
 
         [Fact]
+        public async Task AFullQueueNeverEvictsACaptureInABatchInFlight()
+        {
+            Harness h = new Harness();
+            RavensightConfig config = h.Config();
+            config.TrackLifecycleEvents = false;
+            config.MaxQueueSize = 2;
+            RavensightClient client = null;
+            bool during = false;
+            bool droppedWhileInFlight = true;
+            h.Transport.Routes["/track/batch"] = r =>
+            {
+                if (!during)
+                {
+                    during = true;
+                    // The queue is full of the batch in flight: a new capture
+                    // may not evict the capture inside it, so it is dropped.
+                    droppedWhileInFlight = !client.ProcessLog(Thrown("Exception: second"));
+                }
+                return FakeTransport.Json(202, "{}");
+            };
+            client = await h.Started(config);
+            client.Track("play");
+            Assert.True(client.ProcessLog(Thrown("Exception: first")));
+            await client.FlushAsync();
+            Assert.True(droppedWhileInFlight, "the in-flight capture was not evicted");
+            List<string> sent = h.Transport.To("/track/batch").SelectMany(FakeTransport.EventsOf)
+                .Select(e => (string)e["event"] == "error" ? (string)RavensightJson.AsObject(e["data"])["rs_message"] : (string)e["event"]).ToList();
+            Assert.Equal(new[] { "play", "first" }, sent.ToArray());
+            Assert.Equal(0, client.QueueCount);
+        }
+
+        [Fact]
+        public async Task EveryQueueFileWriteIsHandedToTheBackupExclusionHook()
+        {
+            string dir = TempDir();
+            Harness h = new Harness();
+            h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
+            RavensightConfig config = h.Config();
+            config.TrackLifecycleEvents = false;
+            config.QueueDirectory = dir;
+            List<string> written = new List<string>();
+            config.QueueFileWritten = written.Add;
+            RavensightClient client = await h.Started(config);
+            client.Track("a");
+            client.PersistNow();
+            client.Track("b");
+            client.PersistNow();
+            Assert.Equal(2, written.Count);
+            Assert.All(written, path => Assert.Equal(client.QueueFilePath, path));
+            Directory.Delete(dir, true);
+        }
+
+        [Fact]
         public async Task Rule3NoTrailInTheFileAndOptOutAndResetDeleteCaptures()
         {
             string dir = TempDir();

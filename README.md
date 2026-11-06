@@ -616,6 +616,27 @@ Besides the events you send, the SDK sends:
 The persisted queue file holds queued events and each session's opaque origin
 stamp; never the session token or signing secret.
 
+**Backups.** The queue file holds origin stamps and scrubbed error captures,
+so it stays out of backups. On iOS the SDK marks it excluded from iCloud and
+device backups (`Device.SetNoBackupFlag`) after every write. On Android, Auto
+Backup copies app files by default; add these rules to your backup rule files
+(Unity writes `persistentDataPath` to the external files directory by default,
+or the internal one with Write Permission set to Internal, so exclude both):
+
+```xml
+<!-- in your fullBackupContent file -->
+<exclude domain="external" path="Ravensight/" />
+<exclude domain="file" path="Ravensight/" />
+
+<!-- in your dataExtractionRules file, inside both <cloud-backup> and <device-transfer> -->
+<exclude domain="external" path="Ravensight/" />
+<exclude domain="file" path="Ravensight/" />
+```
+
+Point the `<application>` element of your Android manifest at those files
+with `android:fullBackupContent` and `android:dataExtractionRules`. Desktop
+platforms have no app backup the SDK can opt out of.
+
 The player's choice is stored by the SDK under `ravensight_tracking_enabled`.
 `Ravensight.SetTrackingEnabled(false)` saves it at once, discards anything still
 queued and stops all requests. It is read again on every launch, before

@@ -167,6 +167,12 @@ namespace RealitySE
         /// memory only.
         /// </summary>
         public string QueueDirectory;
+        /// <summary>
+        /// Called with the queue file's path after every write, on the thread
+        /// that wrote it. The Unity layer marks the file excluded from iCloud
+        /// and device backups on iOS (Device.SetNoBackupFlag).
+        /// </summary>
+        public Action<string> QueueFileWritten;
         /// <summary>Device fields sent on POST /session. Each is cleaned to at most 128 printable characters.</summary>
         public string DeviceModel;
         public string DeviceOsVersion;
