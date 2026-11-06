@@ -28,9 +28,60 @@ namespace RealitySE
 
         public readonly string FilePath;
 
+        /// <summary>The one temporary file a write goes through: the queue file's path plus ".tmp".</summary>
+        public string TempPath { get { return FilePath + ".tmp"; } }
+
+        /// <summary>
+        /// Marks a path excluded from backups and says whether it worked. Null
+        /// where the platform has no app backup to opt out of. The Unity layer
+        /// sets it on iOS.
+        /// </summary>
+        public Func<string, bool> ExcludeFromBackup;
+
+        /// <summary>A warning sink: it is never given a path or queue contents.</summary>
+        public Action<string> Warn;
+
+        private bool _warned;
+
         public RavensightQueueStore(string directory, string ingestKey)
         {
             FilePath = Path.Combine(directory, "queue-" + RavensightDelivery.QueueKeyHash(ingestKey) + ".json");
+        }
+
+        private bool Exclude(string path)
+        {
+            Func<string, bool> exclude = ExcludeFromBackup;
+            if (exclude == null) return true;
+            try { return exclude(path); }
+            catch (Exception) { return false; }
+        }
+
+        private void WarnOnce(string message)
+        {
+            if (_warned) return;
+            _warned = true;
+            Action<string> warn = Warn;
+            if (warn != null) warn(message);
+        }
+
+        /// <summary>
+        /// At load: marks the queue folder and an existing queue file excluded
+        /// from backups, so files written by older versions are covered too.
+        /// </summary>
+        public void ExcludeExisting()
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(FilePath);
+                bool ok = true;
+                if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory)) ok = Exclude(directory);
+                if (File.Exists(FilePath)) ok = Exclude(FilePath) && ok;
+                if (!ok) WarnOnce("Ravensight: the queue folder could not be excluded from backups.");
+            }
+            catch (Exception)
+            {
+                // A missing folder has nothing to exclude.
+            }
         }
 
         /// <summary>What a load found.</summary>
@@ -133,38 +184,70 @@ namespace RealitySE
                 {
                     if (events == null || events.Count == 0)
                     {
-                        if (File.Exists(FilePath)) File.Delete(FilePath);
+                        DeleteFiles();
                         return true;
                     }
                     string text = Serialize(events);
                     string directory = Path.GetDirectoryName(FilePath);
                     if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-                    string temp = FilePath + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
-                    File.WriteAllText(temp, text, new UTF8Encoding(false));
-                    if (!File.Exists(FilePath))
-                    {
-                        File.Move(temp, FilePath);
-                        return true;
-                    }
+                    string temp = TempPath;
                     try
                     {
-                        // An atomic swap where the file system has one.
-                        File.Replace(temp, FilePath, null);
+                        File.WriteAllText(temp, text, new UTF8Encoding(false));
+                        // Excluded before it takes the queue file's place: the
+                        // attribute moves with the file on a same-volume rename.
+                        bool excluded = Exclude(temp);
+                        if (!File.Exists(FilePath))
+                        {
+                            File.Move(temp, FilePath);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                // An atomic swap where the file system has one.
+                                File.Replace(temp, FilePath, null);
+                            }
+                            catch (Exception)
+                            {
+                                // A platform without File.Replace: the old file is
+                                // whole until this point, and the new one is complete.
+                                File.Delete(FilePath);
+                                File.Move(temp, FilePath);
+                            }
+                        }
+                        if (!excluded)
+                        {
+                            WarnOnce("Ravensight: could not exclude the queue file from backups; retrying on the final file.");
+                            if (!Exclude(FilePath)) WarnAlways("Ravensight: the queue file could not be excluded from backups.");
+                        }
+                        return true;
                     }
                     catch (Exception)
                     {
-                        // A platform without File.Replace: the old file is
-                        // whole until this point, and the new one is complete.
-                        File.Delete(FilePath);
-                        File.Move(temp, FilePath);
+                        // A failed write never leaves a temporary file behind.
+                        try { if (File.Exists(temp)) File.Delete(temp); } catch (Exception) { }
+                        return false;
                     }
-                    return true;
                 }
             }
             catch (Exception)
             {
                 return false;
             }
+        }
+
+        private void WarnAlways(string message)
+        {
+            Action<string> warn = Warn;
+            if (warn != null) warn(message);
+        }
+
+        /// <summary>Deletes the queue file and the temporary file a write may have left. Call under the gate.</summary>
+        private void DeleteFiles()
+        {
+            if (File.Exists(FilePath)) File.Delete(FilePath);
+            if (File.Exists(TempPath)) File.Delete(TempPath);
         }
 
         public static string Serialize(IList<RavensightEvent> events)
@@ -220,7 +303,7 @@ namespace RealitySE
             {
                 lock (_gate)
                 {
-                    if (File.Exists(FilePath)) File.Delete(FilePath);
+                    DeleteFiles();
                 }
             }
             catch (Exception)

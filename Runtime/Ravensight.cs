@@ -379,9 +379,9 @@ namespace RealitySE
             config.QueueDirectory = persistQueue ? QueueDirectoryForTests ?? DefaultQueueDirectory() : null;
 #if UNITY_IOS && !UNITY_EDITOR
             // The queue holds origin stamps and scrubbed error captures: never
-            // in an iCloud or device backup. Set after every write, because
-            // each write replaces the file.
-            config.QueueFileWritten = path => UnityEngine.iOS.Device.SetNoBackupFlag(path);
+            // in an iCloud or device backup. A native call, so the result is
+            // known (Device.SetNoBackupFlag returns nothing).
+            config.ExcludeFromBackup = path => RavensightExcludeFromBackup(path);
 #endif
             // Only what Unity reports without a permission prompt; none is a
             // hardware identifier.
@@ -443,6 +443,13 @@ namespace RealitySE
                 return null;
             }
         }
+
+#if UNITY_IOS && !UNITY_EDITOR
+        /// <summary>Plugins/iOS/RavensightBackupExclusion.mm: sets NSURLIsExcludedFromBackupKey.</summary>
+        [System.Runtime.InteropServices.DllImport("__Internal")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.I1)]
+        private static extern bool RavensightExcludeFromBackup(string path);
+#endif
 
         private static string SafeSystemInfo(Func<string> read)
         {

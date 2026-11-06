@@ -545,7 +545,7 @@ namespace RealitySE.Tests
         }
 
         [Fact]
-        public async Task EveryQueueFileWriteIsHandedToTheBackupExclusionHook()
+        public async Task TheTemporaryFileIsExcludedBeforeItReplacesTheQueueFile()
         {
             string dir = TempDir();
             Harness h = new Harness();
@@ -553,15 +553,75 @@ namespace RealitySE.Tests
             RavensightConfig config = h.Config();
             config.TrackLifecycleEvents = false;
             config.QueueDirectory = dir;
-            List<string> written = new List<string>();
-            config.QueueFileWritten = written.Add;
+            List<string> calls = new List<string>();
+            config.ExcludeFromBackup = path =>
+            {
+                calls.Add(File.Exists(path) && path.EndsWith(".tmp", StringComparison.Ordinal) ? "tmp" : Path.GetFileName(path));
+                return true;
+            };
             RavensightClient client = await h.Started(config);
+            calls.Clear();
             client.Track("a");
             client.PersistNow();
             client.Track("b");
             client.PersistNow();
-            Assert.Equal(2, written.Count);
-            Assert.All(written, path => Assert.Equal(client.QueueFilePath, path));
+            Assert.Equal(new[] { "tmp", "tmp" }, calls.ToArray());
+            Assert.False(File.Exists(client.QueueFilePath + ".tmp"));
+            Assert.Empty(h.Warnings);
+            Directory.Delete(dir, true);
+        }
+
+        [Fact]
+        public async Task AFailedExclusionIsWarnedWithoutAPathAndRetriedOnceOnTheFinalFile()
+        {
+            string dir = TempDir();
+            Harness h = new Harness();
+            h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
+            RavensightConfig config = h.Config();
+            config.TrackLifecycleEvents = false;
+            config.QueueDirectory = dir;
+            List<string> calls = new List<string>();
+            config.ExcludeFromBackup = path =>
+            {
+                calls.Add(path);
+                return path.EndsWith(".tmp", StringComparison.Ordinal) ? false : true;
+            };
+            RavensightClient client = await h.Started(config);
+            calls.Clear();
+            client.Track("secret_event");
+            client.PersistNow();
+            Assert.Equal(new[] { client.QueueFilePath + ".tmp", client.QueueFilePath }, calls.ToArray());
+            string warning = Assert.Single(h.Warnings.Where(w => w.Contains("backups")));
+            Assert.False(warning.Contains(dir) || warning.Contains("secret_event"), "no path or contents");
+            Directory.Delete(dir, true);
+        }
+
+        [Fact]
+        public async Task TheFolderAndAnOlderFileAreExcludedAtStartAndDeletesRemoveTheTemporaryFile()
+        {
+            string dir = TempDir();
+            RavensightQueueStore older = new RavensightQueueStore(dir, "gt_live_test");
+            RavensightEvent evt = new RavensightEvent();
+            evt.Name = "old";
+            evt.Timestamp = 1760000000000L;
+            evt.Data = new Dictionary<string, object>();
+            Assert.True(older.Save(new List<RavensightEvent> { evt }));
+            File.WriteAllText(older.TempPath, "partial");
+
+            Harness h = new Harness();
+            h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
+            RavensightConfig config = h.Config();
+            config.TrackLifecycleEvents = false;
+            config.QueueDirectory = dir;
+            List<string> calls = new List<string>();
+            config.ExcludeFromBackup = path => { calls.Add(path); return true; };
+            RavensightClient client = h.Client(config);
+            Assert.Contains(dir, calls);
+            Assert.Contains(older.FilePath, calls);
+
+            client.SetTrackingEnabled(false);
+            Assert.False(File.Exists(older.FilePath));
+            Assert.False(File.Exists(older.TempPath), "opt-out removes the temporary file too");
             Directory.Delete(dir, true);
         }
 

@@ -70,7 +70,11 @@ namespace RealitySE
             {
                 return;
             }
+            store.ExcludeFromBackup = _config.ExcludeFromBackup;
+            store.Warn = WarnLine;
             _queueStore = store;
+            // Files written by older versions get the backup exclusion too.
+            store.ExcludeExisting();
             RavensightQueueStore.LoadResult loaded = store.Load(_nowMs());
             lock (_gate)
             {
@@ -116,15 +120,7 @@ namespace RealitySE
             }
             List<RavensightEvent> snapshot;
             lock (_gate) { snapshot = new List<RavensightEvent>(_queue); }
-            bool saved = store.Save(snapshot);
-            Action<string> written = _config.QueueFileWritten;
-            if (saved && written != null && snapshot.Count > 0)
-            {
-                // The replace makes a new file, so this runs after every write.
-                try { written(store.FilePath); }
-                catch (Exception e) { Emit("queue file hook failed: " + e.Message); }
-            }
-            return saved;
+            return store.Save(snapshot);
         }
 
         /// <summary>Adds an event that already has its id, time and origin to the queue.</summary>

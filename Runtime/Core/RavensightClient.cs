@@ -168,11 +168,14 @@ namespace RealitySE
         /// </summary>
         public string QueueDirectory;
         /// <summary>
-        /// Called with the queue file's path after every write, on the thread
-        /// that wrote it. The Unity layer marks the file excluded from iCloud
-        /// and device backups on iOS (Device.SetNoBackupFlag).
+        /// Marks a path excluded from iCloud and device backups and says
+        /// whether it worked. The queue's temporary file is marked before it
+        /// replaces the queue file; a failure is warned about (with no path or
+        /// contents) and retried once on the final file. The queue folder and
+        /// an existing file are marked at start. Null where there is no app
+        /// backup to opt out of; the Unity layer sets it on iOS.
         /// </summary>
-        public Action<string> QueueFileWritten;
+        public Func<string, bool> ExcludeFromBackup;
         /// <summary>Device fields sent on POST /session. Each is cleaned to at most 128 printable characters.</summary>
         public string DeviceModel;
         public string DeviceOsVersion;

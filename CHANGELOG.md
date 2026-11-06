@@ -44,9 +44,15 @@ prerequisites".
 * `device` on `POST /session`: `SystemInfo.deviceModel`, the version part of
   `SystemInfo.operatingSystem` and `SystemInfo.graphicsDeviceName`.
 
-* The queue file is excluded from iCloud and device backups on iOS after
-  every write; `RavensightConfig.QueueFileWritten` is the hook. The README
-  gives the Android Auto Backup rules a game adds.
+* The queue file is excluded from iCloud and device backups on iOS through a
+  native call whose result is checked (`Runtime/Plugins/iOS`,
+  `RavensightConfig.ExcludeFromBackup`): the temporary file is marked before
+  it replaces the queue file, a failure is warned about without a path and
+  retried once on the final file, and the folder and an existing file are
+  marked at start for files from older versions. The temporary file is a
+  single `queue-<hash>.json.tmp`, deleted on a failed write and with every
+  delete of the queue file. The README gives the Android Auto Backup rules a
+  game adds.
 * A full queue never evicts a capture inside a batch in flight (0.4.0 could).
 
 ### Server prerequisites

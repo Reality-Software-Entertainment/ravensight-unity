@@ -618,7 +618,11 @@ stamp; never the session token or signing secret.
 
 **Backups.** The queue file holds origin stamps and scrubbed error captures,
 so it stays out of backups. On iOS the SDK marks it excluded from iCloud and
-device backups (`Device.SetNoBackupFlag`) after every write. On Android, Auto
+device backups (`NSURLIsExcludedFromBackupKey`, through the package's
+`Plugins/iOS` file): the temporary file is marked before it replaces the
+queue file, a failure is logged once (without a path) and retried on the
+final file, and the folder and any older file are marked at start. A failed
+write, and every delete, removes the temporary file too. On Android, Auto
 Backup copies app files by default; add these rules to your backup rule files
 (Unity writes `persistentDataPath` to the external files directory by default,
 or the internal one with Write Permission set to Internal, so exclude both):
