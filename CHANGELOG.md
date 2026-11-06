@@ -28,7 +28,7 @@ All notable changes to this package are documented here.
 * `RavensightConfig.ErrorCapture`, `RavensightOptions.ErrorCapture`, an
   **Error Capture** Inspector field, `Ravensight.SetErrorCapture(bool)` and
   `Ravensight.IsErrorCaptureActive`.
-* Tests: `Tests/Editor/Core/ErrorCaptureTests.cs` (36 cases).
+* Tests: `Tests/Editor/Core/ErrorCaptureTests.cs` (39 cases).
 
 ### Changed
 
@@ -39,7 +39,7 @@ All notable changes to this package are documented here.
 
 ### Verified
 
-* 155 .NET Core tests pass, and `Runtime/Core` compiles as C# 7.3 for
+* 158 .NET Core tests pass, and `Runtime/Core` compiles as C# 7.3 for
   netstandard2.0, both on the .NET 8 SDK that ships inside Unity 6000.6.5f1.
   All Runtime sources compile against the Unity 6000.6.5f1 engine assemblies
   with zero warnings.

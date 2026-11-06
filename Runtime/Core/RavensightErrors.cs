@@ -54,9 +54,10 @@ namespace RealitySE
             new Regex(@"/Users/[^/\s]+", Opts),
             new Regex(@"/home/[^/\s]+", Opts),
             new Regex(@"[A-Za-z]:\\Users\\[^\\\s]+", Opts | RegexOptions.IgnoreCase),
-            // Runs of 32 or more with at least one digit, so long snake_case
-            // names in a stack survive.
-            new Regex(@"(?=[A-Za-z0-9+/=_-]*\d)[A-Za-z0-9+/=_-]{32,}", Opts),
+            // Runs of 32 or more of [A-Za-z0-9+=_-] with at least one digit
+            // inside the run itself, so long snake_case names and file paths
+            // ("/" ends a run) in a stack survive.
+            new Regex(@"(?<![A-Za-z0-9+=_-])(?=[A-Za-z+=_-]*\d)[A-Za-z0-9+=_-]{32,}", Opts),
             new Regex(@"\b(?:\d{1,3}\.){3}\d{1,3}\b", Opts),
             new Regex(@"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}\b|(?<![\w:])::1\b", Opts),
         };
