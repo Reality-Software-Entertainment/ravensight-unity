@@ -103,6 +103,10 @@ namespace RealitySE
         // Any thread. Copies and returns.
         private void OnLogMessage(string condition, string stackTrace, LogType type)
         {
+            // The cheap checks first: a log or warning line with the trail off,
+            // or anything while not accepting, is dropped before any copy.
+            if (!_inbox.Accepting) return;
+            if ((type == LogType.Log || type == LogType.Warning) && !_inbox.WantTrail) return;
             if (_inHandler) return;
             _inHandler = true;
             try

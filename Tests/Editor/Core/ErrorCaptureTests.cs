@@ -152,9 +152,39 @@ namespace RealitySE.Tests
             inbox.WantTrail = true;
             Assert.True(inbox.Offer(Log(RavensightLogLevel.Info, "a line")));
             for (int i = 0; i < 100; i++) inbox.Offer(Log(RavensightLogLevel.Error, "e"));
-            Assert.Equal(RavensightErrorInbox.Capacity, inbox.Count);
-            Assert.Equal(RavensightErrorInbox.Capacity, inbox.Drain().Count);
+            Assert.Equal(RavensightErrorInbox.Capacity + 1, inbox.Count);
+            Assert.Equal(RavensightErrorInbox.Capacity + 1, inbox.Drain().Count);
             Assert.Equal(0, inbox.Count);
+        }
+
+        [Fact]
+        public void HeavyLoggingCannotPushErrorsOutOfTheInbox()
+        {
+            RavensightErrorInbox inbox = new RavensightErrorInbox();
+            inbox.Accepting = true;
+            inbox.WantTrail = true;
+            for (int i = 0; i < 1000; i++) inbox.Offer(Log(RavensightLogLevel.Info, "spam " + i));
+            Assert.True(inbox.Offer(Log(RavensightLogLevel.Error, "real error")));
+            Assert.True(inbox.Offer(Thrown("uncaught", "Exception", "thrown", null)));
+            List<RavensightLogEntry> drained = inbox.Drain();
+            Assert.Equal(RavensightErrorInbox.Capacity + 2, drained.Count);
+            Assert.Equal(2, drained.Count(e => !RavensightErrorInbox.IsTrailOnly(e)));
+        }
+
+        [Fact]
+        public void OnceTheCapsAreSpentNothingIsScrubbed()
+        {
+            Harness h = new Harness();
+            // The fake transport completes synchronously, so this stays on one thread.
+            RavensightClient client = h.Started().GetAwaiter().GetResult();
+            for (int i = 0; i < 6; i++) client.ProcessLog(Log(RavensightLogLevel.Exception, "Exception: burst", Stack("B" + (char)('a' + i))));
+
+            RavensightErrorRules.ScrubCallsOnThisThread = 0;
+            for (int i = 0; i < 100; i++)
+            {
+                Assert.False(client.ProcessLog(Log(RavensightLogLevel.Exception, "Exception: every frame bob@example.com", Stack("F"))));
+            }
+            Assert.Equal(0, RavensightErrorRules.ScrubCallsOnThisThread);
         }
 
         // --- The gate ------------------------------------------------------------

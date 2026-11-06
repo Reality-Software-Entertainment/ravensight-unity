@@ -142,9 +142,13 @@ namespace RealitySE
         private static readonly Regex ExceptionLine = new Regex(@"^([A-Za-z_][A-Za-z0-9_.`+]*)\s*:\s?(.*)$", Opts | RegexOptions.Singleline);
         private static readonly Regex FrameNoise = new Regex(@"\[0x[0-9a-fA-F]+\]|<0x[0-9a-fA-F]+>|:\d+", Opts);
 
+        /// <summary>How many times <see cref="Scrub(string)"/> ran on this thread. A diagnostic for tests.</summary>
+        [ThreadStatic] public static int ScrubCallsOnThisThread;
+
         /// <summary>The contract's device scrub: emails, tokens, gt_ keys, long runs, IPs, home paths, URL query and fragment.</summary>
         public static string Scrub(string text)
         {
+            ScrubCallsOnThisThread++;
             if (string.IsNullOrEmpty(text)) return text ?? "";
             string output = text;
             for (int i = 0; i < ScrubPatterns.Length; i++)
@@ -337,6 +341,28 @@ namespace RealitySE
         }
 
         /// <summary>
+        /// True while the session cap and the token bucket would allow one more
+        /// capture. Checked before any scrub or key work, so an error logged
+        /// every frame costs almost nothing once the caps are spent.
+        /// </summary>
+        public bool HasRoom(long nowMs)
+        {
+            if (_captured >= RavensightErrorRules.MaxPerSession) return false;
+            Refill(nowMs);
+            return _tokens >= 1.0;
+        }
+
+        private void Refill(long nowMs)
+        {
+            if (_tokensAtMs >= 0 && nowMs > _tokensAtMs)
+            {
+                _tokens = Math.Min(RavensightErrorRules.PerMinute,
+                    _tokens + (nowMs - _tokensAtMs) * RavensightErrorRules.PerMinute / 60000.0);
+            }
+            _tokensAtMs = nowMs;
+        }
+
+        /// <summary>
         /// Takes one capture for the key when every cap allows it. Counts only
         /// what passes. Over a cap returns false, and the caller drops it silently.
         /// </summary>
@@ -347,12 +373,7 @@ namespace RealitySE
             _byKey.TryGetValue(key, out seen);
             if (seen >= RavensightErrorRules.MaxPerKey) return false;
 
-            if (_tokensAtMs >= 0 && nowMs > _tokensAtMs)
-            {
-                _tokens = Math.Min(RavensightErrorRules.PerMinute,
-                    _tokens + (nowMs - _tokensAtMs) * RavensightErrorRules.PerMinute / 60000.0);
-            }
-            _tokensAtMs = nowMs;
+            Refill(nowMs);
             if (_tokens < 1.0) return false;
 
             _tokens -= 1.0;
@@ -424,7 +445,9 @@ namespace RealitySE
     /// <summary>
     /// A bounded, lock-guarded buffer the engine's log callbacks write to
     /// from any thread, drained on the main thread. Never logs and never
-    /// throws; over 64 waiting entries a new one is dropped.
+    /// throws. Errors and exceptions have their own quota of 64 waiting
+    /// entries and trail lines another, so heavy Debug.Log output can never
+    /// push a real error out. Over a quota a new entry is dropped.
     /// </summary>
     public sealed class RavensightErrorInbox
     {
@@ -434,6 +457,8 @@ namespace RealitySE
 
         private readonly object _gate = new object();
         private List<RavensightLogEntry> _pending = new List<RavensightLogEntry>();
+        private int _pendingErrors;
+        private int _pendingLines;
         private volatile bool _accepting;
         private volatile bool _wantTrail;
 
@@ -444,17 +469,33 @@ namespace RealitySE
 
         public int Count { get { lock (_gate) { return _pending.Count; } } }
 
+        /// <summary>True for info and warning lines, which only ever feed the trail.</summary>
+        public static bool IsTrailOnly(RavensightLogEntry entry)
+        {
+            return entry.Source == null && (entry.Level == RavensightLogLevel.Info || entry.Level == RavensightLogLevel.Warning);
+        }
+
         /// <summary>Called from any thread. True when the entry was kept.</summary>
         public bool Offer(RavensightLogEntry entry)
         {
             if (!_accepting) return false;
-            if ((entry.Level == RavensightLogLevel.Info || entry.Level == RavensightLogLevel.Warning) && !_wantTrail) return false;
+            bool line = IsTrailOnly(entry);
+            if (line && !_wantTrail) return false;
             if (entry.Source == null && RavensightErrorRules.IsSdkLine(entry.Text)) return false;
             entry.Text = Bound(entry.Text, MaxTextChars);
             entry.Stack = Bound(entry.Stack, MaxStackChars);
             lock (_gate)
             {
-                if (_pending.Count >= Capacity) return false;
+                if (line)
+                {
+                    if (_pendingLines >= Capacity) return false;
+                    _pendingLines++;
+                }
+                else
+                {
+                    if (_pendingErrors >= Capacity) return false;
+                    _pendingErrors++;
+                }
                 _pending.Add(entry);
             }
             return true;
@@ -466,13 +507,20 @@ namespace RealitySE
             {
                 List<RavensightLogEntry> drained = _pending;
                 _pending = new List<RavensightLogEntry>();
+                _pendingErrors = 0;
+                _pendingLines = 0;
                 return drained;
             }
         }
 
         public void Clear()
         {
-            lock (_gate) { _pending.Clear(); }
+            lock (_gate)
+            {
+                _pending.Clear();
+                _pendingErrors = 0;
+                _pendingLines = 0;
+            }
         }
 
         private static string Bound(string value, int max)
@@ -656,9 +704,15 @@ namespace RealitySE
             if (string.IsNullOrEmpty(message)) message = type;
             if (string.IsNullOrEmpty(message)) return false;
 
+            long now = _nowMs();
+            lock (_errorGate)
+            {
+                // Spent caps cost a counter and a clock read, nothing more.
+                if (!_errors.HasRoom(now)) return false;
+            }
+
             string scrubbed = RavensightErrorRules.Scrub(message, RavensightErrorRules.MaxMessageChars);
             string trimmedStack = RavensightErrorRules.TrimStack(stack);
-            long now = _nowMs();
             string trail = null;
             lock (_errorGate)
             {

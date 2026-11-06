@@ -22,13 +22,16 @@ All notable changes to this package are documented here.
 * Device limits per session: 30 captures, 3 per error, 10 trails, 6 a
   minute. Scrubbed on the device before queueing (emails, tokens, `gt_`
   keys, long digit-bearing base64 or hex runs that are not file paths, IPs with a digit, home paths, URL credentials, query
-  and fragment; input cut to 4 times the field limit first). The SDK's own lines and stacks are never captured.
+  and fragment; input cut to 4 times the field limit first). The SDK's own lines and stacks are never captured. Once the caps are spent an
+  error costs no scrub or key work, and the buffer between the hooks and the
+  main thread keeps a separate quota for errors so heavy logging cannot push
+  them out.
 * The trail: the last 20 lines, sent with a captured error only when the
   game's `errorCapture.trail` is on.
 * `RavensightConfig.ErrorCapture`, `RavensightOptions.ErrorCapture`, an
   **Error Capture** Inspector field, `Ravensight.SetErrorCapture(bool)` and
   `Ravensight.IsErrorCaptureActive`.
-* Tests: `Tests/Editor/Core/ErrorCaptureTests.cs` (41 cases, including the shared `scrub-vectors.json` fixture).
+* Tests: `Tests/Editor/Core/ErrorCaptureTests.cs` (43 cases, including the shared `scrub-vectors.json` fixture).
 
 ### Changed
 
@@ -39,7 +42,7 @@ All notable changes to this package are documented here.
 
 ### Verified
 
-* 160 .NET Core tests pass, and `Runtime/Core` compiles as C# 7.3 for
+* 162 .NET Core tests pass, and `Runtime/Core` compiles as C# 7.3 for
   netstandard2.0, both on the .NET 8 SDK that ships inside Unity 6000.6.5f1.
   All Runtime sources compile against the Unity 6000.6.5f1 engine assemblies
   with zero warnings.
