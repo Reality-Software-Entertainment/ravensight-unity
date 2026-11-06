@@ -45,9 +45,10 @@ namespace RealitySE
         // Order matters: a URL loses its query first, home paths go before the
         // long run rule so the rest of the path survives.
         private static readonly Regex LongRunPattern = new Regex(@"[A-Za-z0-9+/=_-]{32,}", Opts);
-        private static readonly Regex[] PathWords =
+        private static readonly char[] PathPartSeparators = { '_', '-' };
+        private static readonly Regex[] PathParts =
         {
-            new Regex(@"^[a-z0-9]+([_-][a-z0-9]+)*$", Opts),
+            new Regex(@"^[a-z0-9]+$", Opts),
             new Regex(@"^[A-Z][a-z0-9]*(?:[A-Z][a-z0-9]+)*$", Opts),
             new Regex(@"^[A-Z0-9]{1,6}$", Opts),
         };
@@ -56,8 +57,9 @@ namespace RealitySE
         /// <summary>
         /// A run of 32 or more of [A-Za-z0-9+/=_-] becomes [token] when it holds
         /// a digit, unless it is a path: it has a "/" and every piece between
-        /// slashes is empty or a path word (snake or kebab case, CamelCase, or a
-        /// short upper-case code), each under 32 characters.
+        /// slashes is empty or a path word under 32 characters: one or more parts
+        /// joined by "_" or "-", each lowercase, CamelCase, or an acronym of 1 to
+        /// 6 capitals or digits.
         /// </summary>
         private static string LongRun(Match match)
         {
@@ -77,9 +79,14 @@ namespace RealitySE
                 string piece = pieces[i];
                 if (piece.Length == 0) continue;
                 if (piece.Length >= 32) return false;
-                bool word = false;
-                for (int w = 0; w < PathWords.Length && !word; w++) word = PathWords[w].IsMatch(piece);
-                if (!word) return false;
+                string[] parts = piece.Split(PathPartSeparators);
+                for (int p = 0; p < parts.Length; p++)
+                {
+                    if (parts[p].Length == 0) return false;
+                    bool word = false;
+                    for (int w = 0; w < PathParts.Length && !word; w++) word = PathParts[w].IsMatch(parts[p]);
+                    if (!word) return false;
+                }
             }
             return true;
         }
