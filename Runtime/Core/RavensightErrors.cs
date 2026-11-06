@@ -116,9 +116,9 @@ namespace RealitySE
             new Regex(@"\bgt_[A-Za-z0-9_]+", Opts),
             // A home folder is the whole segment up to the next slash, quote,
             // <, >, ':' or end of line, spaces included (contract 5).
+            new Regex(@"[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/][^/\\'""<>:\r\n]+", Opts | RegexOptions.IgnoreCase),
             new Regex(@"/Users/[^/\\'""<>:\r\n]+", Opts),
             new Regex(@"/home/[^/\\'""<>:\r\n]+", Opts),
-            new Regex(@"[A-Za-z]:\\(?:Users|Documents and Settings)\\[^/\\'""<>:\r\n]+", Opts | RegexOptions.IgnoreCase),
             // Runs of 32 or more: see LongRun, which keeps paths and names.
             LongRunPattern,
             new Regex(@"\b(?:\d{1,3}\.){3}\d{1,3}\b", Opts),
