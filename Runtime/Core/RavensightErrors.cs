@@ -44,6 +44,46 @@ namespace RealitySE
 
         // Order matters: a URL loses its query first, home paths go before the
         // long run rule so the rest of the path survives.
+        private static readonly Regex LongRunPattern = new Regex(@"[A-Za-z0-9+/=_-]{32,}", Opts);
+        private static readonly Regex[] PathWords =
+        {
+            new Regex(@"^[a-z0-9]+([_-][a-z0-9]+)*$", Opts),
+            new Regex(@"^[A-Z][a-z0-9]*(?:[A-Z][a-z0-9]+)*$", Opts),
+            new Regex(@"^[A-Z0-9]{1,6}$", Opts),
+        };
+        private static readonly MatchEvaluator LongRunEvaluator = LongRun;
+
+        /// <summary>
+        /// A run of 32 or more of [A-Za-z0-9+/=_-] becomes [token] when it holds
+        /// a digit, unless it is a path: it has a "/" and every piece between
+        /// slashes is empty or a path word (snake or kebab case, CamelCase, or a
+        /// short upper-case code), each under 32 characters.
+        /// </summary>
+        private static string LongRun(Match match)
+        {
+            string run = match.Value;
+            bool digit = false;
+            for (int i = 0; i < run.Length && !digit; i++) digit = run[i] >= '0' && run[i] <= '9';
+            if (!digit || IsPathRun(run)) return run;
+            return "[token]";
+        }
+
+        private static bool IsPathRun(string run)
+        {
+            if (run.IndexOf('/') < 0) return false;
+            string[] pieces = run.Split('/');
+            for (int i = 0; i < pieces.Length; i++)
+            {
+                string piece = pieces[i];
+                if (piece.Length == 0) continue;
+                if (piece.Length >= 32) return false;
+                bool word = false;
+                for (int w = 0; w < PathWords.Length && !word; w++) word = PathWords[w].IsMatch(piece);
+                if (!word) return false;
+            }
+            return true;
+        }
+
         private static readonly Regex[] ScrubPatterns =
         {
             new Regex(@"(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s?#]*)[?#]\S*", Opts),
@@ -54,17 +94,15 @@ namespace RealitySE
             new Regex(@"/Users/[^/\s]+", Opts),
             new Regex(@"/home/[^/\s]+", Opts),
             new Regex(@"[A-Za-z]:\\Users\\[^\\\s]+", Opts | RegexOptions.IgnoreCase),
-            // Runs of 32 or more of [A-Za-z0-9+=_-] with at least one digit
-            // inside the run itself, so long snake_case names and file paths
-            // ("/" ends a run) in a stack survive.
-            new Regex(@"(?<![A-Za-z0-9+=_-])(?=[A-Za-z+=_-]*\d)[A-Za-z0-9+=_-]{32,}", Opts),
+            // Runs of 32 or more: see LongRun, which keeps paths and names.
+            LongRunPattern,
             new Regex(@"\b(?:\d{1,3}\.){3}\d{1,3}\b", Opts),
             new Regex(@"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}\b|(?<![\w:])::1\b", Opts),
         };
 
         private static readonly string[] ScrubReplacements =
         {
-            "$1", "[email]", "Bearer [token]", "[token]", "[token]", "~", "~", "~", "[token]", "[ip]", "[ip]",
+            "$1", "[email]", "[token]", "[token]", "[token]", "~", "~", "~", "[token]", "[ip]", "[ip]",
         };
 
         private static readonly Regex[] TemplatePatterns =
@@ -88,7 +126,9 @@ namespace RealitySE
             string output = text;
             for (int i = 0; i < ScrubPatterns.Length; i++)
             {
-                output = ScrubPatterns[i].Replace(output, ScrubReplacements[i]);
+                output = ScrubPatterns[i] == LongRunPattern
+                    ? LongRunPattern.Replace(output, LongRunEvaluator)
+                    : ScrubPatterns[i].Replace(output, ScrubReplacements[i]);
             }
             return output;
         }

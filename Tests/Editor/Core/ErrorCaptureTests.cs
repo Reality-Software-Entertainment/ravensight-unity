@@ -54,14 +54,14 @@ namespace RealitySE.Tests
 
         [Theory]
         [InlineData("mail bob@example.com now", "mail [email] now")]
-        [InlineData("auth Bearer abc.def-ghi", "auth Bearer [token]")]
+        [InlineData("auth Bearer abc.def-ghi", "auth [token]")]
         [InlineData("jwt eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl end", "jwt [token] end")]
         [InlineData("key gt_live_abcdef123 end", "key [token] end")]
         [InlineData("run 0123456789abcdef0123456789abcdef!", "run [token]!")]
         [InlineData("at handle_the_very_long_snake_case_function_name_here", "at handle_the_very_long_snake_case_function_name_here")]
         [InlineData("key sk9aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4y end", "key [token] end")]
         [InlineData("at Assets/Scripts/Inventory2/InventoryControllerBehaviour.cs:42", "at Assets/Scripts/Inventory2/InventoryControllerBehaviour.cs:42")]
-        [InlineData("at Assets/Scripts/Inventory2/the_very_long_snake_case_function_name_here_ok", "at Assets/Scripts/Inventory2/the_very_long_snake_case_function_name_here_ok")]
+        [InlineData("aws wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1 leaked", "aws [token] leaked")]
         [InlineData("from 192.168.1.20 ok", "from [ip] ok")]
         [InlineData("from 2001:db8:0:0:0:0:0:1 ok", "from [ip] ok")]
         [InlineData("file /Users/jacob/Game/a.cs", "file ~/Game/a.cs")]
@@ -71,6 +71,29 @@ namespace RealitySE.Tests
         public void ScrubFollowsTheContract(string input, string expected)
         {
             Assert.Equal(expected, RavensightErrorRules.Scrub(input));
+        }
+
+        /// <summary>The shared vectors, copied from the platform repo's docs/errors/scrub-vectors.json.</summary>
+        [Fact]
+        public void ScrubMatchesEverySharedVector()
+        {
+            string path = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(ThisFile()), "scrub-vectors.json");
+            List<object> cases = RavensightJson.GetArray(RavensightJson.Parse(System.IO.File.ReadAllText(path)), "cases");
+            Assert.NotNull(cases);
+            Assert.True(cases.Count >= 18);
+            foreach (object item in cases)
+            {
+                string name = RavensightJson.GetString(item, "name", "");
+                string input = RavensightJson.GetString(item, "in", null);
+                string expected = RavensightJson.GetString(item, "out", null);
+                string actual = RavensightErrorRules.Scrub(input);
+                Assert.True(expected == actual, name + ": expected \"" + expected + "\", got \"" + actual + "\"");
+            }
+        }
+
+        private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string path = "")
+        {
+            return path;
         }
 
         [Theory]

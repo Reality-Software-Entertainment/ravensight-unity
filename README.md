@@ -493,7 +493,8 @@ full a captured error is dropped first. A `413` answer is handled like a
 
 What is never sent: before queueing, the message and stack are scrubbed on
 the device. Emails become `[email]`; bearer tokens, JWTs, `gt_` keys and runs
-of 32 or more base64 or hex characters with a digit become `[token]`; IPv4
+of 32 or more base64 or hex characters with a digit (other than a file path
+made of ordinary words) become `[token]`; IPv4
 and IPv6 addresses become `[ip]`; `/Users/<name>`, `/home/<name>` and
 `C:\Users\<name>` become `~`; URLs lose their query and fragment. The message
 is cut to 200 characters and the stack to 2,000. Lines the SDK itself logs,
