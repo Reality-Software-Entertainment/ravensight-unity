@@ -7,6 +7,45 @@
 
 All notable changes to this package are documented here.
 
+## [Unreleased]
+
+### Added
+
+* **Automatic error capture, on by default.** Exceptions Unity logs become
+  `error` events with `rs_source` `uncaught`; `Debug.LogError` and failed
+  asserts become `log` at `warning`. Unhandled `AppDomain` exceptions and
+  unobserved task exceptions are observed (never marked observed). Warnings
+  and log lines only feed the optional trail. The hooks run only with a key,
+  after consent, while the SDK is enabled and while the game's Errors switch
+  (`errorCapture.enabled` on the settings or session answer, absent means
+  on) is on. Boot errors before that answer are held, at most 5.
+* Device limits per session: 30 captures, 3 per error, 10 trails, 6 a
+  minute. Scrubbed on the device before queueing (emails, tokens, `gt_`
+  keys, long digit-bearing base64 or hex runs, IPs, home paths, URL query
+  and fragment). The SDK's own lines and stacks are never captured.
+* The trail: the last 20 lines, sent with a captured error only when the
+  game's `errorCapture.trail` is on.
+* `RavensightConfig.ErrorCapture`, `RavensightOptions.ErrorCapture`, an
+  **Error Capture** Inspector field, `Ravensight.SetErrorCapture(bool)` and
+  `Ravensight.IsErrorCaptureActive`.
+* Tests: `Tests/Editor/Core/ErrorCaptureTests.cs` (36 cases).
+
+### Changed
+
+* Gameplay events are queued ahead of captured errors, and a full queue
+  drops a captured error before any gameplay event.
+* A `413` answer to a batch is handled like a `400`: split, then drop the
+  one event the server refuses.
+
+### Verified
+
+* 155 .NET Core tests pass, and `Runtime/Core` compiles as C# 7.3 for
+  netstandard2.0, both on the .NET 8 SDK that ships inside Unity 6000.6.5f1.
+  All Runtime sources compile against the Unity 6000.6.5f1 engine assemblies
+  with zero warnings.
+* Not run: the Unity Editor (EditMode or PlayMode), a player build, or a
+  real error against a local API. The hooks themselves are parse only.
+
 ## [0.3.0] - 2026-10-16
 
 For games whose builds or source anyone can download. A game that sets

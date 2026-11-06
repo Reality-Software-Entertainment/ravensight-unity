@@ -191,6 +191,8 @@ Everything game code needs is static on `Ravensight`:
 | `Ravensight.TrackResource(flow, resource, amount, ...)` | A resource gained (`source`) or spent (`sink`). |
 | `Ravensight.TrackProgression(status, p1, p2, p3, score, ...)` | A progression step: `start`, `complete` or `fail`. |
 | `Ravensight.TrackError(severity, message, stack, ...)` | An error, with a severity from `debug` to `critical`. |
+| `Ravensight.SetErrorCapture(bool)` | The game's runtime switch for automatic error capture, not saved. |
+| `Ravensight.IsErrorCaptureActive` | True while automatic error capture runs. |
 | `Ravensight.Client` | The underlying `RavensightClient` for anything else. |
 
 Event values can be strings, numbers, bools, nulls, nested dictionaries or
@@ -235,6 +237,7 @@ catch (RavensightException e)
 | Track Pause Events | off | Also sends `game_paused` and `game_resumed`. |
 | Session Timeout Seconds | `1800` | iOS and Android: time in the background after which returning starts a new session. |
 | Performance | off | Opt in to per session frame rate sampling and one `health` event. See [Typed events](#typed-events). |
+| Error Capture | on | Automatic error capture. Untick to opt the game out. See [Automatic error capture](#automatic-error-capture). |
 | Verbose Logging | off | Logs SDK activity to the console. Warnings you need to act on are always logged. |
 
 ## Automatic events
@@ -452,6 +455,67 @@ Ravensight.TrackProgression(RavensightTyped.Complete, "world1", "level2", score:
 Ravensight.TrackError(RavensightTyped.Error, ex.Message, ex.StackTrace);
 ```
 
+## Automatic error capture
+
+On by default (Unreleased). Errors in a live game become ordinary `error`
+events, each one event on the usual meter, so you see them in the Errors view
+without writing any code.
+
+What is captured, through `Application.logMessageReceivedThreaded`:
+
+| Unity log type | Becomes |
+| --- | --- |
+| `Exception` (an unhandled exception Unity logged, or `Debug.LogException`) | an event with `rs_source` `uncaught`, `rs_severity` `error`, `rs_error_type` from the exception line (`NullReferenceException`) and the stack Unity gives |
+| `Error` and `Assert` (`Debug.LogError`, failed asserts) | an event with `rs_source` `log`, `rs_severity` `warning`, `rs_error_type` `Error` or `Assert` |
+| `Warning` and `Log` | never an event; a trail line only, when the trail is on |
+
+It also observes `AppDomain.CurrentDomain.UnhandledException` (`uncaught`)
+and `TaskScheduler.UnobservedTaskException` (`unhandled_rejection`). It only
+observes: other subscribers still run, the exception is never marked
+observed, and nothing about how your game handles errors changes. One
+exception that Unity both logs and raises is sent once.
+
+When it runs: only with a key, after the player's consent (with Consent set
+to Opt In, after `SetTrackingEnabled(true)`), while the SDK is enabled, while
+the Error Capture field is ticked, and while the game's Errors switch on the
+server is on. The switch arrives on the settings and session answers; when it
+is absent capture is on. Errors raised during boot, before that answer, are
+held in memory (at most 5) and sent once the answer says capture is on, or
+discarded unsent if it says off. Opting out, `ResetDeviceId()` or
+`SetEnabled(false)` stops capture at once and forgets anything held.
+
+Bounded on the device, per session: at most 30 captures, 3 of the same error
+(type, message with numbers and ids replaced, and first frame of your code),
+and 6 a minute. Over a limit the error is dropped silently. Your gameplay
+events always go ahead of captured errors in the queue, and when the queue is
+full a captured error is dropped first. A `413` answer is handled like a
+`400`: the batch is split and the one bad event dropped.
+
+What is never sent: before queueing, the message and stack are scrubbed on
+the device. Emails become `[email]`; bearer tokens, JWTs, `gt_` keys and runs
+of 32 or more base64 or hex characters with a digit become `[token]`; IPv4
+and IPv6 addresses become `[ip]`; `/Users/<name>`, `/home/<name>` and
+`C:\Users\<name>` become `~`; URLs lose their query and fragment. The message
+is cut to 200 characters and the stack to 2,000. Lines the SDK itself logs,
+and errors thrown from the SDK's own code, are never captured. Manual
+`TrackError` calls are unchanged: they are never blocked by the switch, and
+their text is sent as you wrote it and scrubbed by the server.
+
+The trail (off unless the game's trail switch on the server is on): an
+in-memory ring of the last 20 lines (log lines, warnings, earlier errors and
+the names of events you tracked), each `+<ms since session start> <level>
+<text>`, scrubbed and cut to 120 characters. It is sent only with a captured
+error, at most 1,500 characters and on at most 10 errors a session, never on
+its own and never written to disk.
+
+To opt out, untick **Error Capture** on the component, or:
+
+```csharp
+Ravensight.Initialize(key, new RavensightOptions { ErrorCapture = false });
+// or for part of a run
+Ravensight.SetErrorCapture(false);
+```
+
 ### Performance
 
 Tick the Performance field in the Inspector (or set
@@ -592,7 +656,9 @@ Runtime/
     RavensightStorage.cs          IRavensightStorage plus an in memory version
     RavensightTransport.cs        IRavensightTransport plus request and response
     RavensightJson.cs             small JSON reader and writer
+    RavensightErrors.cs           error capture rules: scrub, caps, trail, thread-safe inbox
   Ravensight.cs                   MonoBehaviour singleton, timers, app lifecycle
+  RavensightErrorHooks.cs         the log and exception hooks, drained on the main thread
   RavensightPlayerPrefsStorage.cs IRavensightStorage over PlayerPrefs
   RavensightUnityTransport.cs     IRavensightTransport over UnityWebRequest
 Tests/Editor/                     the Core suite in the Unity Test Runner (EditMode)
