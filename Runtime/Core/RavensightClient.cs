@@ -65,6 +65,8 @@ namespace RealitySE
         public Dictionary<string, object> Data;
         /// <summary>Unix seconds, captured when the event happened.</summary>
         public long Timestamp;
+        /// <summary>An automatic error capture: queued behind gameplay events and evicted first.</summary>
+        internal bool Captured;
 
         public Dictionary<string, object> ToPayload()
         {
@@ -133,6 +135,12 @@ namespace RealitySE
         /// and one <c>health</c> event is sent per session.
         /// </summary>
         public bool Performance;
+        /// <summary>
+        /// Automatic error capture, on by default. It still runs only with a
+        /// key, consent and the game's errorCapture switch on the server.
+        /// False opts the game out; manual TrackError is unaffected.
+        /// </summary>
+        public bool ErrorCapture = true;
         /// <summary>The playtest run, or null for a real player.</summary>
         public RavensightPlaytestContext Playtest;
         /// <summary>Persistent storage. Null keeps everything in memory.</summary>
@@ -292,6 +300,8 @@ namespace RealitySE
             _storage = config.Storage ?? new RavensightMemoryStorage();
             _random = config.Random ?? SharedRandom;
             _startSeconds = _nowMs() / 1000L;
+            _errorCaptureOn = config.ErrorCapture;
+            _errors.Reset(_nowMs());
 
             ApiUrl = NormalizeApiUrl(config.ApiUrl);
             TrackingEnabled = true;
@@ -778,6 +788,7 @@ namespace RealitySE
             _gameExitedQueued = false;
             _healthSent = false;
             _frames.Reset();
+            ResetErrorSession();
             // Queued before any await so it leads the new session.
             QueueGameStarted();
 
@@ -959,9 +970,23 @@ namespace RealitySE
         {
             if (string.IsNullOrEmpty(eventName)) throw new ArgumentException("event name is required", "eventName");
             if (!IsActive) return false;
+            TrailEvent(eventName);
+            return Enqueue(eventName, data, timestampSeconds, false);
+        }
+
+        /// <summary>
+        /// Queues one event. Gameplay events go ahead of any queued automatic
+        /// error captures (never ahead of a batch in flight), and when the
+        /// queue is full a capture is evicted before any gameplay event; a
+        /// capture that would evict gameplay is itself dropped.
+        /// </summary>
+        private bool Enqueue(string eventName, Dictionary<string, object> data, long timestampSeconds, bool captured)
+        {
+            if (!IsActive) return false;
 
             RavensightEvent evt = new RavensightEvent();
             evt.Name = eventName;
+            evt.Captured = captured;
             evt.Data = WithPlaytestTags(data);
             AddExposureTags(evt.Data);
             evt.Data[EventIdKey] = NextEventId();
@@ -983,16 +1008,39 @@ namespace RealitySE
                 int cap = _config.MaxQueueSize > 0 ? _config.MaxQueueSize : DefaultQueueCap;
                 while (_queue.Count >= cap)
                 {
-                    _queue.RemoveAt(0); // drop oldest so the newest always survive
+                    int evict = FirstCapturedIndex(0);
+                    if (evict < 0)
+                    {
+                        // Only gameplay is queued: a capture never displaces it.
+                        if (captured)
+                        {
+                            _stats.Dropped++;
+                            return false;
+                        }
+                        evict = 0; // drop oldest so the newest always survive
+                    }
+                    _queue.RemoveAt(evict);
                     _stats.Dropped++;
-                    if (_inflightCount > 0) _inflightCount--;
+                    if (evict < _inflightCount) _inflightCount--;
                 }
-                _queue.Add(evt);
+                int at = captured ? -1 : FirstCapturedIndex(_inflightCount);
+                if (at < 0) _queue.Add(evt);
+                else _queue.Insert(at, evt);
                 count = _queue.Count;
             }
 
             if (count >= MaxBatchSize) Observe(FlushCoreAsync(false, true));
             return true;
+        }
+
+        /// <summary>The first queued automatic capture at or after start, or -1. Call under the gate.</summary>
+        private int FirstCapturedIndex(int start)
+        {
+            for (int i = Math.Max(0, start); i < _queue.Count; i++)
+            {
+                if (_queue[i].Captured) return i;
+            }
+            return -1;
         }
 
         /// <summary>A copy of the caller's data with the playtest tags, if any. Never the caller's own dictionary.</summary>
@@ -1200,12 +1248,14 @@ namespace RealitySE
                     break;
                 }
 
-                if (response.Status == 400)
+                if (response.Status == 400 || response.Status == 413)
                 {
+                    // A 413 (body too large) is handled like a 400: split, and
+                    // drop the one event the server will never take.
                     if (batch.Count > 1)
                     {
                         batchLimit = Math.Max(1, batch.Count / 2);
-                        Emit("batch rejected with HTTP 400, splitting to " + batchLimit);
+                        Emit("batch rejected with HTTP " + response.Status + ", splitting to " + batchLimit);
                         continue;
                     }
                     // A single event the server will never take. Drop it so the
@@ -1221,7 +1271,7 @@ namespace RealitySE
                     batchLimit = MaxBatchSize;
                     WarnOnce("dropped_400", "Ravensight: the server refused an event (HTTP 400) and it was dropped. " +
                                             "Check the event name and data size.");
-                    Emit("dropped one event rejected with HTTP 400");
+                    Emit("dropped one event rejected with HTTP " + response.Status);
                     continue;
                 }
 
@@ -1359,6 +1409,7 @@ namespace RealitySE
             if (response.Status == 200 && RavensightJson.TryGetBool(response.Json(), "trackingEnabled", out enabled))
             {
                 if (!enabled) DisableTracking();
+                else ApplyErrorCaptureSettings(response.Json());
                 return;
             }
             if (response.Status == 401)
@@ -1449,6 +1500,7 @@ namespace RealitySE
                     _invalidKey = false;
                     ResetBackoff();
                     SetStatus(null);
+                    ApplyErrorCaptureSettings(parsed);
                     Emit("session ready");
                     await FetchConfigAsync();
                     return token;
@@ -1670,6 +1722,8 @@ namespace RealitySE
                 _queue.Clear();
                 _inflightCount = 0;
             }
+            // Opt-out, reset, disable and a stopped run forget the trail and boot errors too.
+            ClearErrorTrail();
         }
 
         // --- Status -------------------------------------------------------------------
