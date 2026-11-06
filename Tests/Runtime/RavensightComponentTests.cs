@@ -28,7 +28,12 @@ namespace RealitySE.Tests
         {
             Ravensight.StorageForTests = new RavensightMemoryStorage();
             Ravensight.TransportFactoryForTests = null;
+            // A fresh queue directory per test, so no test reads another's queue.
+            _queueDir = Path.Combine(Path.GetTempPath(), "rs-playmode-" + Guid.NewGuid().ToString("N"));
+            Ravensight.QueueDirectoryForTests = _queueDir;
         }
+
+        private string _queueDir;
 
         [UnityTearDown]
         public IEnumerator TearDown()
@@ -38,6 +43,8 @@ namespace RealitySE.Tests
             yield return null;
             Ravensight.StorageForTests = null;
             Ravensight.TransportFactoryForTests = null;
+            Ravensight.QueueDirectoryForTests = null;
+            if (_queueDir != null && Directory.Exists(_queueDir)) Directory.Delete(_queueDir, true);
         }
 
         /// <summary>Records each request with the runner's state at the moment it was sent.</summary>

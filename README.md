@@ -19,9 +19,11 @@ dependencies.
 
 ## Verification status
 
-Version 0.3.1 passes 119 .NET core tests, and its Runtime sources compile against
-Unity 6000.6.5f1 assemblies. A fresh Editor test run was blocked by local license
-initialization, so the checks below describe earlier public-build verification.
+The unreleased branch passes 149 .NET core tests (every shared delivery vector among
+them), `Runtime/Core` compiles as C# 7.3 for netstandard2.0, and all Runtime
+sources, the MonoBehaviour layer included, compile against the Unity
+6000.6.5f1 engine assemblies. It has not been run in the Unity Test Runner or
+on a device; the checks below describe earlier public-build verification.
 See [release validation](HELD_RELEASE_VALIDATION.md) for the versioned evidence
 and remaining device, Editor and live-storage limits.
 
@@ -361,18 +363,21 @@ apart from the refused key and jitter changes listed in the CHANGELOG.
   saves the choice but restarts nothing; the next launch tries the key again.
   A `401` on a batch still means the session expired: a new one is opened
   first.
-* **Jitter.** A failed request is retried after the backoff plus or minus 20
-  percent, never sooner than half a second and never later than 5 minutes. A
-  server's `Retry-After` is obeyed exactly.
-* **Events over 8,192 bytes** of data as JSON (what the server checks; the
+* **Jitter.** A failed request is retried after the backoff times a random
+  factor between 0.5 and 1, never sooner than half a second and never later
+  than 5 minutes. A server's `Retry-After` is obeyed exactly.
+* **Events over 8,192 bytes** of data as the server measures it (JSON bytes,
+  with a typed error's message and stack counted one byte a character; the
   name and timestamp are not counted) are dropped before they are queued,
   with one warning for the run. `Track` returns false for each.
 
 What a request carries: the settings check sends only the `X-API-Key`
-header; the session sends `deviceId`, `gameVersion`, `platform` and, when
-set, `distribution` and `joinToken`; a batch sends `events`, each with
-`event`, `data` and `timestamp`; feedback sends `message` and the optional
-`category` and `rating`.
+header; the session sends `deviceId`, `gameVersion`, `platform`, `sdk`,
+`device` (see [Device id and privacy](#device-id-and-privacy)) and, when set,
+`distribution` and `joinToken`; a batch sends `events`, each with `event`,
+`data`, `timestamp` (unix milliseconds) and, for an event from an earlier
+session, `origin`; feedback sends `message` and the optional `category` and
+`rating`.
 
 ## How delivery works
 
@@ -380,25 +385,48 @@ set, `distribution` and `joinToken`; a batch sends `events`, each with
   only queues; a send happens on the timer, as soon as 50 are queued, on
   `Flush()`, on background and on quit. A flush keeps sending batches until the
   queue drains.
-* **Offline queue.** Events accumulate up to Max Queue Size. Past that the
-  oldest are dropped so the newest are always kept. The queue lives in memory.
-* **Never dropped on a network failure.** Events leave the queue only after the
-  server answers `202`.
-* **Session expiry.** A `401` on a batch clears the session, opens a new one and
-  re sends the same batch, at most twice in a row, then backs off.
+* **Persisted queue.** On by default (Persist Queue in the Inspector). The
+  queue is kept in one file per ingest key,
+  `Application.persistentDataPath/Ravensight/queue-<hash>.json`, written
+  through a temporary file and an atomic replace, so a partial write never
+  replaces a good one. It is written at most once a second while events
+  arrive, at once after every delivered batch, on background and on quit,
+  and read back at start. Events survive a crash,
+  a kill or a lost network and go out on the next launch. At most 500 events
+  are kept, oldest dropped first, and anything older than 89 days is dropped
+  at start (`Stats.Expired`). Max Queue Size caps the queue in memory.
+* **Original session, build and platform.** Each event remembers the session
+  it was tracked under (the opaque `origin` the server returned). An event sent
+  on a later launch carries it, so the server stores it under the run it
+  happened in. A saved exit whose session has expired is queued under that
+  origin too. The origin is kept only in the queue file and never logged.
+* **Errors behind gameplay.** Error events (`rs_kind` `error`) queue behind
+  gameplay events, never inside a batch awaiting an answer, and a full queue
+  evicts the oldest error first, so a burst of errors never pushes out the
+  game's own events.
+* **Removed only once delivered.** Events leave the queue, and the file, only
+  after a `2xx`, or a `400` that names them by `index`.
+* **Answers.** A `400` with `index` drops that event and resends the rest;
+  `400 batch_too_large` halves the batch, and a single event still too large is
+  dropped; any other `400` drops the request's events (each logged once). A
+  `401` opens one new session and resends with the same ids; a second `401` in
+  a row waits for the backoff. A `403` on a batch keeps the events and stops
+  sending until the next launch. `413` splits; `415` resends once uncompressed.
 * **Rate limits.** A `429` waits exactly `Retry-After` seconds, and so does a
   `503` that carries one. With no such header the SDK backs off exponentially
-  from 10 seconds to a 5 minute ceiling, each wait plus or minus 20 percent
-  (never under half a second), so many players who lost the network
-  together do not come back together. The queue is held.
-* **Event ids.** Every event's data carries an `rs_event_id`, so a batch sent
-  again after a failure is recognised as the same events.
-* **Oversized events.** An event whose data is over 8,192 bytes as JSON is
-  dropped before it is queued: `Track` returns false, it is counted in
-  `Stats.Dropped`, and one warning is logged for the run.
-* **Rejected events.** A `400` halves the batch and retries down to a single
-  event. An event still rejected on its own is dropped, counted in
-  `Stats.Dropped` and logged once, so it cannot block everything behind it.
+  from 10 seconds to a 5 minute ceiling, each wait times a random factor
+  between 0.5 and 1 (never under half a second), so many players who lost the
+  network together do not come back together. `Flush()`, a move to the
+  background and quit cut a backoff short, never a `Retry-After`.
+* **Compression.** A batch of 1,024 bytes or more is sent gzip compressed.
+* **Signed requests.** When `POST /session` answers with `signing` (sessions
+  opened with a public key), every batch carries `X-Ravensight-Timestamp` and
+  `X-Ravensight-Signature: v1=<hex>`, an HMAC-SHA256 of
+  `v1:<timestamp>:<body>` over the uncompressed body, with the device clock
+  corrected by the server's time. The secret is kept in memory only.
+* **Event ids.** Every event's data carries an `rs_event_id`, kept across
+  resends and launches, so the server drops a resend whose first copy was
+  stored as a duplicate (within its duplicate window, 24 hours by default).
 * **Kill switch.** `GET /settings` is read at boot, before any batch is sent
   (the one exception is the saved exit of an app killed in the background,
   described above). A `403 tracking_disabled` from any request has the same
@@ -406,6 +434,41 @@ set, `distribution` and `joinToken`; a batch sends `events`, each with
 * **Nothing while off.** While the client is disabled, the player has opted
   out, the server has switched tracking off or the run is stopped, the SDK makes
   no request of any kind.
+
+## Ads and attribution
+
+```csharp
+// A paid impression in micros of the currency: 0.0015 USD is "1500".
+Ravensight.TrackAdRevenue("admob", "rewarded", "level_end", "1500", "USD");
+
+// AdMob's OnPaidEvent: AdValue.Value is already micros.
+Ravensight.TrackAdMobPaidEvent(adValue.Value, adValue.CurrencyCode, "admob", "rewarded", "level_end");
+
+// A mediation callback that reports a double in major units (MAX, LevelPlay):
+Ravensight.TrackAdRevenueFromMediation(adInfo.NetworkName, adInfo.AdFormat, adInfo.Placement, adInfo.Revenue, "USD");
+
+// Clicks, rewards and failures carry no revenue.
+Ravensight.TrackAd("admob", "rewarded", "rewarded", "level_end");
+
+// Where this install came from, once per device.
+Ravensight.SetAttribution("store_referrer", network: "google", campaign: "spring");
+```
+
+`TrackAd(network, format, result, placement, revenueMicros, currency)` sends one
+`rs_ad` event. Format is `banner`, `interstitial`, `rewarded`, `native`,
+`app_open` or `other`; result is `shown`, `clicked`, `failed` or `rewarded`.
+Revenue is a digit string of whole micros, sent only with `shown`, always with
+a three letter currency, never converted. `RavensightDelivery.MicrosFromRevenue(0.0015)`
+and `MicrosFromDecimalString("0.0015")` both give `"1500"`, rounding half up
+past six decimals on the decimal digits, never by multiplying a float. The
+helpers return false and send nothing for a value the server would flag, such
+as revenue without a currency.
+
+`SetAttribution(source, network, campaign, adset, creative, touchTimeMs)` sends
+one `rs_attribution` event per device id: `ravensight_attribution_sent`, stored
+beside the device id, makes later calls return false across restarts. Pass
+`Ravensight.DeviceId` to an attribution partner as its customer user id before
+the partner starts, so its install callback names this device.
 
 ## Levels and deaths
 
@@ -468,9 +531,21 @@ sample taken, nothing is sent. It is off by default.
 The SDK generates a random device id on first run (`dev_` plus 32 hex
 characters from the platform's secure random generator) and stores it in
 `PlayerPrefs` under `ravensight_device_id`. No hardware identifier, advertising
-id, IP based fingerprint or personal data is collected by the SDK itself. Only
-the events you choose to send leave the device. If you switch Performance on,
-one extra `health` event per session carries frame rate, memory and boot time.
+id, IP based fingerprint or personal data is collected by the SDK itself.
+Besides the events you send, the SDK sends:
+
+* **Device fields**, once per session on `POST /session`: `model`
+  (`SystemInfo.deviceModel`), `osVersion` (`SystemInfo.operatingSystem` with
+  the OS name removed) and `gpu` (`SystemInfo.graphicsDeviceName`). Unity
+  reports these without a permission prompt; none is a hardware identifier.
+  Each is at most 128 printable characters. The server derives the country
+  itself; the SDK never sends one.
+* **Attribution**, once per install, only when the game calls `SetAttribution`.
+* If you switch Performance on, one `health` event per session carries frame
+  rate, memory and boot time.
+
+The persisted queue file holds queued events and each session's opaque origin
+stamp; never the session token or signing secret.
 
 The player's choice is stored by the SDK under `ravensight_tracking_enabled`.
 `Ravensight.SetTrackingEnabled(false)` saves it at once, discards anything still
@@ -664,9 +739,15 @@ validated cache scoped to API host, ingest key, device, platform and game versio
 Opt-out clears this cache, and reset or late responses cannot restore the old
 identity's values. Inactive clients return your defaults and send no requests.
 
-Active experiments automatically add `rs_exp_<key>` to newly queued events.
-Already queued events retain their original exposure tags; caller-supplied
-exposure tags are discarded. Config-ready fires after a completed refresh,
+A fetch alone is not an exposure. The first typed read (`GetConfigString`,
+`GetConfigBool`, `GetConfigNumber`, `GetConfigJson`) in a session exposes the
+player to every experiment the config lists: the SDK sends one `rs_exposure`
+event, and every event queued after it in that session carries
+`rs_exp_<key>: <variant>`. Events queued before the read stay untagged, a new
+session (after the background timeout) starts untagged until its own first
+read, and an experiment missing from a later fetch is no longer tagged.
+Queued events keep the tags they were queued with, across launches. A well
+formed `rs_exp_<key>` of your own is left alone; a malformed one is replaced. Config-ready fires after a completed refresh,
 including offline fallback. Inspect the returned boolean to distinguish a
 successful fresh/304 response from offline fallback. Responses are bounded to
 50 keys, 8 KB per value, 20 nested levels and 10 experiments.

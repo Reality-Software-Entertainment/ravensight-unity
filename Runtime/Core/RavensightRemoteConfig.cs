@@ -113,17 +113,9 @@ namespace RealitySE
             }
         }
 
-        public string GetConfigString(string key, string fallback) { lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && v is string ? (string)v : fallback; } }
-        public bool GetConfigBool(string key, bool fallback) { lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && v is bool ? (bool)v : fallback; } }
-        public double GetConfigNumber(string key, double fallback) { lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && v is double ? (double)v : fallback; } }
-        public object GetConfigJson(string key, object fallback) { lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && (v is Dictionary<string, object> || v is List<object>) ? RavensightJson.Parse(RavensightJson.Write(v)) : fallback; } }
-        private void AddExposureTags(Dictionary<string, object> data)
-        {
-            lock (_gate)
-            {
-                foreach (string key in new List<string>(data.Keys)) if (key.StartsWith("rs_exp_", StringComparison.Ordinal)) data.Remove(key);
-                if (IsActive) foreach (var item in _assignments) data["rs_exp_" + item.Key] = item.Value;
-            }
-        }
+        public string GetConfigString(string key, string fallback) { MarkExposed(); lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && v is string ? (string)v : fallback; } }
+        public bool GetConfigBool(string key, bool fallback) { MarkExposed(); lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && v is bool ? (bool)v : fallback; } }
+        public double GetConfigNumber(string key, double fallback) { MarkExposed(); lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && v is double ? (double)v : fallback; } }
+        public object GetConfigJson(string key, object fallback) { MarkExposed(); lock (_gate) { object v; return IsActive && _configValues.TryGetValue(key, out v) && (v is Dictionary<string, object> || v is List<object>) ? RavensightJson.Parse(RavensightJson.Write(v)) : fallback; } }
     }
 }

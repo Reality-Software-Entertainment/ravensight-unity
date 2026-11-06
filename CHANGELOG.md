@@ -1,3 +1,56 @@
+## Unreleased
+
+Follows the platform's SDK delivery, ads and attribution, exposure and device
+contracts. Automatic error capture is not in this change; it ships from the
+error capture branch. The server releases for them ship first; see "Server
+prerequisites".
+
+### Changes for 0.3.x games
+
+* The queue is persisted by default in
+  `Application.persistentDataPath/Ravensight/queue-<hash>.json`: version 2 of
+  the delivery contract, atomic writes, 500 events, 89 days. Persist Queue in
+  the Inspector turns it off.
+* Event timestamps are unix milliseconds (were seconds). `TrackAt` still takes
+  seconds; `TrackAtMs` is new.
+* Retry waits are the backoff times a random factor between 0.5 and 1 (were
+  plus or minus 20 percent). `Flush()`, background and quit cut a backoff
+  short; a server `Retry-After` is never cut short and reports
+  `Skipped = "retry_after"`.
+* A `400` with `index` drops that event only; only `400 batch_too_large`
+  halves the batch; any other `400` drops the request's events. A batch
+  `403` keeps the events and stops sending until the next launch
+  (`Skipped = "refused"`). One new session after a batch `401`, then the
+  backoff (was two). `413` splits; `415` resends once uncompressed.
+* Experiment tags follow the exposure contract: a fetch alone tags nothing;
+  the first typed config read in a session sends one `rs_exposure` and tags
+  that session's later events. A well formed `rs_exp_<key>` of the game's own
+  is kept (it was discarded).
+* Error events (`rs_kind` `error`) queue behind gameplay events and a full
+  queue evicts the oldest error first.
+
+### Added
+
+* Origin replay: events carry the session they were tracked under; a saved exit
+  whose session expired is queued under its origin.
+* gzip for batches of 1,024 bytes or more; request signing when the session
+  answers with `signing`, secret in memory only.
+* `EventBytes` measures as the server does: a typed error's message and stack
+  count one byte a character.
+* `TrackAd`, `TrackAdRevenue`, `TrackAdRevenueFromMediation`,
+  `TrackAdMobPaidEvent`, `SetAttribution` (once per device) and
+  `RavensightDelivery.MicrosFromDecimalString`, `MicrosFromRevenue`,
+  `AdFormatFrom`.
+* `device` on `POST /session`: `SystemInfo.deviceModel`, the version part of
+  `SystemInfo.operatingSystem` and `SystemInfo.graphicsDeviceName`.
+
+### Server prerequisites
+
+* `rs_exposure` must be in `SDK_AUTOMATIC_EVENTS` before release, or a public
+  key's allowlist refuses it.
+* The Phase 2 delivery release and the Phase 5 `rs_ad_*` and `rs_attr_*`
+  keys must be deployed first.
+
 ## 0.3.1 (held)
 
 * Add session-start remote config, scoped ETag/offline cache, strict typed getters and config-ready notification.

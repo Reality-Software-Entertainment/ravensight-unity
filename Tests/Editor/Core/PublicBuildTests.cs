@@ -306,12 +306,12 @@ namespace RealitySE.Tests
         // --- Jitter -----------------------------------------------------------------------
 
         [Fact]
-        public void JitterIsPlusOrMinusTwentyPercentWithinTheFloorAndCeiling()
+        public void JitterIsAFactorFromHalfToOneWithinTheFloorAndCeiling()
         {
-            Assert.Equal(8000L, RavensightClient.JitteredWaitMs(10000, 0.0));
-            Assert.Equal(10000L, RavensightClient.JitteredWaitMs(10000, 0.5));
-            Assert.True(RavensightClient.JitteredWaitMs(10000, 0.999999) <= 12000L);
-            Assert.True(RavensightClient.JitteredWaitMs(10000, 0.999999) > 11990L);
+            Assert.Equal(5000L, RavensightClient.JitteredWaitMs(10000, 0.0));
+            Assert.Equal(7500L, RavensightClient.JitteredWaitMs(10000, 0.5));
+            Assert.True(RavensightClient.JitteredWaitMs(10000, 0.999999) <= 10000L);
+            Assert.True(RavensightClient.JitteredWaitMs(10000, 0.999999) > 9990L);
             Assert.Equal(500L, RavensightClient.JitteredWaitMs(100, 0.0));
             Assert.Equal(300000L, RavensightClient.JitteredWaitMs(300000, 0.999999));
 
@@ -319,7 +319,7 @@ namespace RealitySE.Tests
             for (int i = 0; i < 1000; i++)
             {
                 long wait = RavensightClient.JitteredWaitMs(20000, source.NextDouble());
-                Assert.True(wait >= 16000L && wait <= 24000L, "wait " + wait);
+                Assert.True(wait >= 10000L && wait <= 20000L, "wait " + wait);
             }
         }
 
@@ -331,14 +331,14 @@ namespace RealitySE.Tests
             RavensightConfig config = low.Config();
             config.Random = () => 0.0;
             RavensightClient client = await low.Started(config);
-            Assert.Equal(8000L, client.RetryInMs);
+            Assert.Equal(5000L, client.RetryInMs);
 
             Harness high = new Harness();
             high.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
             config = high.Config();
             config.Random = () => 0.99;
             client = await high.Started(config);
-            Assert.True(client.RetryInMs > 10000L && client.RetryInMs <= 12000L);
+            Assert.True(client.RetryInMs > 9000L && client.RetryInMs <= 10000L);
         }
 
         [Fact]

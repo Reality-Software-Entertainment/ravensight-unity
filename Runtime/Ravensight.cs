@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -84,6 +85,9 @@ namespace RealitySE
         [Tooltip("Opt in: sample the frame rate once a second and send one health event per session, on background (mobile) or quit (desktop). Off by default.")]
         [SerializeField] private bool performance = false;
 
+        [Tooltip("Keep the queue in a file under Application.persistentDataPath, so events survive a crash, a kill or a lost network and are sent on the next launch. On by default.")]
+        [SerializeField] private bool persistQueue = true;
+
         [Tooltip("Log SDK activity to the Unity console. Warnings that need your attention are always logged.")]
         [SerializeField] private bool verboseLogging = false;
 
@@ -100,6 +104,7 @@ namespace RealitySE
         {
             public string Name;
             public Dictionary<string, object> Data;
+            /// <summary>Unix milliseconds.</summary>
             public long Timestamp;
         }
 
@@ -114,6 +119,7 @@ namespace RealitySE
         // PlayerPrefs.
         internal static Func<MonoBehaviour, int, IRavensightTransport> TransportFactoryForTests;
         internal static IRavensightStorage StorageForTests;
+        internal static string QueueDirectoryForTests;
 
         /// <summary>The live singleton, or null before one exists.</summary>
         public static Ravensight Instance { get; private set; }
@@ -364,6 +370,12 @@ namespace RealitySE
             config.Performance = performance;
             config.Playtest = ResolvePlaytest();
             config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
+            config.QueueDirectory = persistQueue ? QueueDirectoryForTests ?? DefaultQueueDirectory() : null;
+            // Only what Unity reports without a permission prompt; none is a
+            // hardware identifier.
+            config.DeviceModel = SafeSystemInfo(() => SystemInfo.deviceModel);
+            config.DeviceOsVersion = RavensightDelivery.OsVersionFrom(SafeSystemInfo(() => SystemInfo.operatingSystem));
+            config.DeviceGpu = SafeSystemInfo(() => SystemInfo.graphicsDeviceName);
 
             try
             {
@@ -399,6 +411,32 @@ namespace RealitySE
             _bootMs = Time.realtimeSinceStartup * 1000.0;
             _client.Begin();
             ReplayPendingEvents();
+        }
+
+        private static string DefaultQueueDirectory()
+        {
+            try
+            {
+                string root = Application.persistentDataPath;
+                return string.IsNullOrEmpty(root) ? null : Path.Combine(root, "Ravensight");
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private static string SafeSystemInfo(Func<string> read)
+        {
+            try
+            {
+                string value = read();
+                return value == SystemInfo.unsupportedIdentifier || value == "<unknown>" ? null : value;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         /// <summary>The no key start: a client that never touches storage or the network.</summary>
@@ -470,6 +508,9 @@ namespace RealitySE
             // Opt in. Only reads the frame time here; the health event is
             // queued from background entry or quit, never from this hook.
             if (_client.PerformanceEnabled) _client.SamplePerformance(Time.unscaledDeltaTime);
+
+            // Writes the persisted queue at most once a second while events arrive.
+            _client.PersistIfDirty();
 
             if (autoFlushSeconds <= 0f) return;
             _flushTimer += Time.unscaledDeltaTime;
@@ -565,8 +606,10 @@ namespace RealitySE
             if (_client == null) return;
             QueueHealth();
             // Once per session. With an open session the request is issued
-            // before this returns; the process may still end before it lands.
+            // before this returns; the process may still end before it lands,
+            // so the queue is written first and the next launch resends.
             _client.QueueGameExited();
+            _client.PersistNow();
             Observe(_client.FlushAsync());
         }
 
@@ -598,7 +641,7 @@ namespace RealitySE
             PendingEvent pending = new PendingEvent();
             pending.Name = eventName;
             pending.Data = data;
-            pending.Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            pending.Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             lock (PendingGate)
             {
                 while (PendingEvents.Count >= PendingEventCap) PendingEvents.RemoveAt(0);
@@ -664,6 +707,55 @@ namespace RealitySE
         private static bool TrackTyped(RavensightTypedEvent evt)
         {
             return Track(evt.Name, evt.Data);
+        }
+
+        // --- Ads and attribution ------------------------------------------------
+
+        /// <summary>
+        /// One ad lifecycle step. format: banner, interstitial, rewarded, native,
+        /// app_open or other; result: shown, clicked, failed or rewarded.
+        /// revenueMicros is whole micros of currency as a digit string, sent only
+        /// with "shown". False, sending nothing, for a value the server would
+        /// flag, or before the component wakes.
+        /// </summary>
+        public static bool TrackAd(string network, string format, string result, string placement = null,
+            string revenueMicros = null, string currency = null)
+        {
+            RavensightClient client = Client;
+            return client != null && client.TrackAd(network, format, result, placement, revenueMicros, currency);
+        }
+
+        /// <summary>A paid impression in micros: "1500" is 0.0015 of the currency.</summary>
+        public static bool TrackAdRevenue(string network, string format, string placement, string revenueMicros, string currency)
+        {
+            RavensightClient client = Client;
+            return client != null && client.TrackAdRevenue(network, format, placement, revenueMicros, currency);
+        }
+
+        /// <summary>
+        /// From a mediation impression callback that reports a double in major
+        /// units (AppLovin MAX, LevelPlay, TopOn). The format name is mapped and
+        /// the double converted on its digits, never multiplied.
+        /// </summary>
+        public static bool TrackAdRevenueFromMediation(string network, string formatName, string placement, double revenue, string currency)
+        {
+            RavensightClient client = Client;
+            return client != null && client.TrackAdRevenueFromMediation(network, formatName, placement, revenue, currency);
+        }
+
+        /// <summary>From an AdMob paid event: AdValue.Value is already micros.</summary>
+        public static bool TrackAdMobPaidEvent(long valueMicros, string currencyCode, string adSourceName, string format, string placement)
+        {
+            RavensightClient client = Client;
+            return client != null && client.TrackAdMobPaidEvent(valueMicros, currencyCode, adSourceName, format, placement);
+        }
+
+        /// <summary>Where this install came from, sent once per device id across restarts.</summary>
+        public static bool SetAttribution(string source, string network = null, string campaign = null,
+            string adset = null, string creative = null, long? touchTimeMs = null)
+        {
+            RavensightClient client = Client;
+            return client != null && client.SetAttribution(source, network, campaign, adset, creative, touchTimeMs);
         }
 
         /// <summary>
@@ -821,7 +913,7 @@ namespace RealitySE
             }
             for (int i = 0; i < pending.Count; i++)
             {
-                _client.TrackAt(pending[i].Name, pending[i].Data, pending[i].Timestamp);
+                _client.TrackAtMs(pending[i].Name, pending[i].Data, pending[i].Timestamp);
             }
         }
 

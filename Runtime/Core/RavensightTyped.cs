@@ -111,6 +111,85 @@ namespace RealitySE
             return Make("health", data);
         }
 
+        /// <summary>
+        /// The ad event (see <c>RavensightClient.TrackAd</c>). Check it with
+        /// <see cref="AdProblem"/> first: this builder only shapes it.
+        /// </summary>
+        public static RavensightTypedEvent Ad(string network, string format, string result, string placement,
+            string revenueMicros, string currency, Dictionary<string, object> extra = null, string eventName = null)
+        {
+            Dictionary<string, object> data = NewData(extra);
+            data[KindKey] = "ad";
+            data["rs_ad_network"] = network;
+            data["rs_ad_format"] = format;
+            if (!string.IsNullOrEmpty(placement)) data["rs_ad_placement"] = placement;
+            data["rs_ad_result"] = result;
+            if (!string.IsNullOrEmpty(revenueMicros))
+            {
+                data["rs_revenue_micros"] = revenueMicros;
+                data["rs_currency"] = currency == null ? null : currency.ToUpperInvariant();
+            }
+            return Make(Name(eventName, "rs_ad"), data);
+        }
+
+        /// <summary>Why an ad event would be flagged by the server, or null when it is sendable.</summary>
+        public static string AdProblem(string network, string format, string result, string placement,
+            string revenueMicros, string currency)
+        {
+            if (string.IsNullOrEmpty(network) || network.Length > 64) return "network must be 1 to 64 characters";
+            if (Array.IndexOf(RavensightDelivery.AdFormats, format) < 0) return "format is not one of " + string.Join(", ", RavensightDelivery.AdFormats);
+            if (Array.IndexOf(RavensightDelivery.AdResults, result) < 0) return "result is not one of " + string.Join(", ", RavensightDelivery.AdResults);
+            if (placement != null && (placement.Length == 0 || placement.Length > 100)) return "placement must be 1 to 100 characters";
+            bool hasRevenue = !string.IsNullOrEmpty(revenueMicros);
+            if (hasRevenue)
+            {
+                if (revenueMicros.Length > 18) return "revenueMicros must be 1 to 18 digits";
+                for (int i = 0; i < revenueMicros.Length; i++)
+                {
+                    if (revenueMicros[i] < '0' || revenueMicros[i] > '9') return "revenueMicros must be a digit string";
+                }
+                if (currency == null || currency.Length != 3) return "revenue needs a 3 letter currency";
+                for (int i = 0; i < 3; i++)
+                {
+                    char c = char.ToUpperInvariant(currency[i]);
+                    if (c < 'A' || c > 'Z') return "revenue needs a 3 letter currency";
+                }
+                if (result != "shown") return "revenue goes on the shown result only";
+            }
+            else if (!string.IsNullOrEmpty(currency))
+            {
+                return "a currency needs a revenue";
+            }
+            return null;
+        }
+
+        /// <summary>The attribution event (see <c>RavensightClient.SetAttribution</c>).</summary>
+        public static RavensightTypedEvent Attribution(string source, string network, string campaign,
+            string adset, string creative, long? touchTimeMs, string eventName = null)
+        {
+            Dictionary<string, object> data = new Dictionary<string, object>();
+            data[KindKey] = "attribution";
+            data["rs_attr_source"] = source;
+            if (!string.IsNullOrEmpty(network)) data["rs_attr_network"] = network;
+            if (!string.IsNullOrEmpty(campaign)) data["rs_campaign"] = campaign;
+            if (!string.IsNullOrEmpty(adset)) data["rs_adset"] = adset;
+            if (!string.IsNullOrEmpty(creative)) data["rs_creative"] = creative;
+            if (touchTimeMs.HasValue) data["rs_touch_time"] = touchTimeMs.Value;
+            return Make(Name(eventName, "rs_attribution"), data);
+        }
+
+        /// <summary>Why an attribution event would be flagged, or null when it is sendable. Empty optional fields are omitted, not flagged.</summary>
+        public static string AttributionProblem(string source, string network, string campaign,
+            string adset, string creative, long? touchTimeMs)
+        {
+            if (string.IsNullOrEmpty(source) || source.Length > 64) return "source must be 1 to 64 characters";
+            if (network != null && network.Length > 100) return "network must be at most 100 characters";
+            if ((campaign != null && campaign.Length > 200) || (adset != null && adset.Length > 200) ||
+                (creative != null && creative.Length > 200)) return "campaign, adset and creative must be at most 200 characters";
+            if (touchTimeMs.HasValue && (touchTimeMs.Value < 0 || touchTimeMs.Value > 9007199254740991L)) return "touchTime must be epoch milliseconds";
+            return null;
+        }
+
         // The caller's non-reserved keys go in first; every rs_ key is dropped.
         private static Dictionary<string, object> NewData(Dictionary<string, object> extra)
         {
