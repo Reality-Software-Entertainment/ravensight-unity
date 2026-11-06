@@ -80,7 +80,7 @@ namespace RealitySE.Tests
             string path = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(ThisFile()), "scrub-vectors.json");
             List<object> cases = RavensightJson.GetArray(RavensightJson.Parse(System.IO.File.ReadAllText(path)), "cases");
             Assert.NotNull(cases);
-            Assert.True(cases.Count >= 18);
+            Assert.True(cases.Count >= 20);
             foreach (object item in cases)
             {
                 string name = RavensightJson.GetString(item, "name", "");
@@ -89,6 +89,18 @@ namespace RealitySE.Tests
                 string actual = RavensightErrorRules.Scrub(input);
                 Assert.True(expected == actual, name + ": expected \"" + expected + "\", got \"" + actual + "\"");
             }
+        }
+
+        [Fact]
+        public void ALongInputIsCutBeforeScrubbingSoItScrubsFast()
+        {
+            System.Text.StringBuilder hostile = new System.Text.StringBuilder();
+            while (hostile.Length < 200000) hostile.Append("a:b:c:d:e:f:1 x@y.co 0123456789abcdef/");
+            System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+            string scrubbed = RavensightErrorRules.Scrub(hostile.ToString(), RavensightErrorRules.MaxStackChars);
+            watch.Stop();
+            Assert.True(scrubbed.Length <= RavensightErrorRules.MaxStackChars);
+            Assert.True(watch.ElapsedMilliseconds < 1000, "took " + watch.ElapsedMilliseconds + " ms");
         }
 
         private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string path = "")

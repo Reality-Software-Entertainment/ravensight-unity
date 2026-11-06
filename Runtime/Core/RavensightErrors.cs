@@ -84,8 +84,24 @@ namespace RealitySE
             return true;
         }
 
+        private static readonly Regex Ipv6Pattern = new Regex(@"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}\b|(?<![\w:])::1\b", Opts);
+        private static readonly MatchEvaluator Ipv6Evaluator = Ipv6;
+
+        /// <summary>An IPv6 match must hold a digit, so a C++ scope like Face::Add stays.</summary>
+        private static string Ipv6(Match match)
+        {
+            string value = match.Value;
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (value[i] >= '0' && value[i] <= '9') return "[ip]";
+            }
+            return value;
+        }
+
         private static readonly Regex[] ScrubPatterns =
         {
+            // A URL loses any user:password@ first.
+            new Regex(@"(\b[a-zA-Z][a-zA-Z0-9+.-]*://)[^\s/@]+@", Opts),
             new Regex(@"(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s?#]*)[?#]\S*", Opts),
             new Regex(@"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", Opts),
             new Regex(@"\b[Bb][Ee][Aa][Rr][Ee][Rr]\s+[A-Za-z0-9._~+/=-]+", Opts),
@@ -97,12 +113,12 @@ namespace RealitySE
             // Runs of 32 or more: see LongRun, which keeps paths and names.
             LongRunPattern,
             new Regex(@"\b(?:\d{1,3}\.){3}\d{1,3}\b", Opts),
-            new Regex(@"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}\b|(?<![\w:])::1\b", Opts),
+            Ipv6Pattern,
         };
 
         private static readonly string[] ScrubReplacements =
         {
-            "$1", "[email]", "[token]", "[token]", "[token]", "~", "~", "~", "[token]", "[ip]", "[ip]",
+            "$1", "$1", "[email]", "[token]", "[token]", "[token]", "~", "~", "~", "[token]", "[ip]", "[ip]",
         };
 
         private static readonly Regex[] TemplatePatterns =
@@ -126,11 +142,22 @@ namespace RealitySE
             string output = text;
             for (int i = 0; i < ScrubPatterns.Length; i++)
             {
-                output = ScrubPatterns[i] == LongRunPattern
-                    ? LongRunPattern.Replace(output, LongRunEvaluator)
-                    : ScrubPatterns[i].Replace(output, ScrubReplacements[i]);
+                if (ScrubPatterns[i] == LongRunPattern) output = LongRunPattern.Replace(output, LongRunEvaluator);
+                else if (ScrubPatterns[i] == Ipv6Pattern) output = Ipv6Pattern.Replace(output, Ipv6Evaluator);
+                else output = ScrubPatterns[i].Replace(output, ScrubReplacements[i]);
             }
             return output;
+        }
+
+        /// <summary>
+        /// The scrub for a field with a length limit: the input is cut to 4
+        /// times the limit before scrubbing (some rules are quadratic in the
+        /// input) and to the limit after.
+        /// </summary>
+        public static string Scrub(string text, int limit)
+        {
+            if (string.IsNullOrEmpty(text)) return text ?? "";
+            return RavensightTyped.Cut(Scrub(RavensightTyped.Cut(text, limit * 4)), limit);
         }
 
         /// <summary>The message with its variable parts replaced, for the local dedupe key.</summary>
@@ -250,7 +277,7 @@ namespace RealitySE
         {
             string flat = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
             string line = "+" + Math.Max(0L, msSinceSessionStart).ToString(System.Globalization.CultureInfo.InvariantCulture) +
-                          " " + level + " " + Scrub(flat);
+                          " " + level + " " + Scrub(flat, TrailLineChars);
             return RavensightTyped.Cut(line, TrailLineChars);
         }
 
@@ -622,7 +649,7 @@ namespace RealitySE
             if (string.IsNullOrEmpty(message)) message = type;
             if (string.IsNullOrEmpty(message)) return false;
 
-            string scrubbed = RavensightErrorRules.Scrub(message);
+            string scrubbed = RavensightErrorRules.Scrub(message, RavensightErrorRules.MaxMessageChars);
             string trimmedStack = RavensightErrorRules.TrimStack(stack);
             long now = _nowMs();
             string trail = null;
@@ -645,7 +672,7 @@ namespace RealitySE
             data["rs_message"] = RavensightTyped.Cut(scrubbed, RavensightErrorRules.MaxMessageChars);
             if (trimmedStack != null)
             {
-                data["rs_stack"] = RavensightTyped.Cut(RavensightErrorRules.Scrub(trimmedStack), RavensightErrorRules.MaxStackChars);
+                data["rs_stack"] = RavensightErrorRules.Scrub(trimmedStack, RavensightErrorRules.MaxStackChars);
             }
             if (trail != null) data["rs_trail"] = trail;
             if (!_errorSettingsKnown)
