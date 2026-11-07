@@ -123,7 +123,7 @@ namespace RealitySE.Tests
         public void TypedTextVectorsAreCutToTheirCaps()
         {
             int cut = 0;
-            foreach (object raw in (List<object>)Obj(Vectors, "publicKeyTypedText")["cases"])
+            foreach (object raw in (List<object>)Obj(Vectors, "anyKeyEventSize")["cases"])
             {
                 Dictionary<string, object> data = (Dictionary<string, object>)Expand(RavensightJson.AsObject(raw)["data"]);
                 object kind;

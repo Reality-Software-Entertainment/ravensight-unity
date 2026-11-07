@@ -120,8 +120,9 @@ namespace RealitySE
 
         /// <summary>
         /// One event's data size as the server measures it: the UTF-8 bytes of
-        /// its JSON, except that a typed error's rs_message and rs_stack,
-        /// within their 200 and 2,000 character caps, count one byte a character.
+        /// its JSON, except that a typed error's rs_message, rs_stack and
+        /// rs_trail, within their 200, 2,000 and 1,500 character caps, count
+        /// one byte a character.
         /// </summary>
         public static int EventDataBytes(Dictionary<string, object> data)
         {
@@ -132,6 +133,7 @@ namespace RealitySE
             {
                 bytes -= ExemptOverhead(map, "rs_message", RavensightTyped.MaxMessageChars);
                 bytes -= ExemptOverhead(map, "rs_stack", RavensightTyped.MaxStackChars);
+                bytes -= ExemptOverhead(map, "rs_trail", RavensightErrorRules.TrailChars);
             }
             return bytes;
         }
