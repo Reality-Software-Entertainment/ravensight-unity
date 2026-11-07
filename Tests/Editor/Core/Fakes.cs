@@ -75,7 +75,9 @@ namespace RealitySE.Tests
         public static string PathOf(RavensightRequest request)
         {
             int at = request.Url.IndexOf("/api/v1", StringComparison.Ordinal);
-            return at < 0 ? request.Url : request.Url.Substring(at + "/api/v1".Length);
+            string path = at < 0 ? request.Url : request.Url.Substring(at + "/api/v1".Length);
+            int query = path.IndexOf('?');
+            return query < 0 ? path : path.Substring(0, query);
         }
 
         public static List<Dictionary<string, object>> EventsOf(RavensightRequest request)

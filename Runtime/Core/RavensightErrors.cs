@@ -747,12 +747,12 @@ namespace RealitySE
                     RavensightEvent held = new RavensightEvent();
                     held.Name = RavensightErrorRules.EventName;
                     held.Data = data;
-                    held.Timestamp = now / 1000L;
+                    held.Timestamp = now;
                     _heldErrors.Add(held);
                 }
                 return true;
             }
-            return Enqueue(RavensightErrorRules.EventName, data, now / 1000L, true);
+            return Enqueue(RavensightErrorRules.EventName, data, now, true);
         }
     }
 }

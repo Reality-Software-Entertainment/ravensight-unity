@@ -1,3 +1,62 @@
+## [0.5.0] - 2026-11-06
+
+Follows the platform's SDK delivery, ads and attribution, exposure and device
+contracts. Needs a Ravensight server that accepts origins, signatures, gzip bodies,
+`rs_exposure` and the `rs_ad_*` and `rs_attr_*` keys; the hosted service at
+ravensight.io runs one.
+
+### Changes for 0.4.0 games
+
+* The queue is persisted by default in
+  `Application.persistentDataPath/Ravensight/queue-<hash>.json`: version 2 of
+  the delivery contract, atomic writes, 500 events, 89 days. Persist Queue in
+  the Inspector turns it off.
+* Event timestamps are unix milliseconds (were seconds). `TrackAt` still takes
+  seconds; `TrackAtMs` is new.
+* Retry waits are the backoff times a random factor between 0.5 and 1 (were
+  plus or minus 20 percent). `Flush()`, background and quit cut a backoff
+  short; a server `Retry-After` is never cut short and reports
+  `Skipped = "retry_after"`.
+* A `400` with `index` drops that event only; only `400 batch_too_large`
+  halves the batch; any other `400` drops the request's events. A batch
+  `403` keeps the events and stops sending until the next launch
+  (`Skipped = "refused"`). One new session after a batch `401`, then the
+  backoff (was two). `413` splits; `415` resends once uncompressed.
+* Experiment tags follow the exposure contract: a fetch alone tags nothing;
+  the first typed config read in a session sends one `rs_exposure` and tags
+  that session's later events. A well formed `rs_exp_<key>` of the game's own
+  is kept (it was discarded).
+* The error queue rules every SDK shares hold in the persisted queue: the
+  capture flag is stored with each event, so a restored capture still queues
+  behind gameplay and is evicted first; `rs_trail` is never written to the
+  queue file (a restored capture has none); a capture is written to the file
+  at once; an opt-out and `ResetDeviceId` delete it. Captures are stamped in
+  milliseconds like every event.
+* Origin replay: events carry the session they were tracked under; a saved exit
+  whose session expired is queued under its origin.
+* gzip for batches of 1,024 bytes or more; request signing when the session
+  answers with `signing`, secret in memory only.
+* `EventBytes` measures as the server does: a typed error's message, stack
+  and trail count one byte a character.
+* `TrackAd`, `TrackAdRevenue`, `TrackAdRevenueFromMediation`,
+  `TrackAdMobPaidEvent`, `SetAttribution` (once per device) and
+  `RavensightDelivery.MicrosFromDecimalString`, `MicrosFromRevenue`,
+  `AdFormatFrom`.
+* `device` on `POST /session`: `SystemInfo.deviceModel`, the version part of
+  `SystemInfo.operatingSystem` and `SystemInfo.graphicsDeviceName`.
+
+* The queue file is excluded from iCloud and device backups on iOS through a
+  native call whose result is checked (`Runtime/Plugins/iOS`,
+  `RavensightConfig.ExcludeFromBackup`): the temporary file is marked before
+  it replaces the queue file, a failure is warned about without a path and
+  retried once on the final file, and the folder and an existing file are
+  marked at start for files from older versions. The temporary file is a
+  single `queue-<hash>.json.tmp`, deleted on a failed write and with every
+  delete of the queue file. The README gives the Android Auto Backup rules a
+  game adds.
+* A full queue never evicts a capture inside a batch in flight (0.4.0 could).
+
+
 ## 0.3.1 (held)
 
 * Add session-start remote config, scoped ETag/offline cache, strict typed getters and config-ready notification.

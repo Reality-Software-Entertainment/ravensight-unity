@@ -24,7 +24,7 @@ namespace RealitySE.Tests
 
             List<Dictionary<string, object>> events = h.Transport.To("/track/batch").SelectMany(FakeTransport.EventsOf).ToList();
             Assert.Equal(new[] { "game_started", "early" }, events.Select(e => (string)e["event"]));
-            Assert.Equal((double)startSeconds, events[0]["timestamp"]);
+            Assert.Equal((double)(startSeconds * 1000), events[0]["timestamp"]);
         }
 
         [Fact]
@@ -103,7 +103,7 @@ namespace RealitySE.Tests
             Assert.Equal("tok_1", exit.Headers["X-Session-Token"]);
             Dictionary<string, object> exitEvent = FakeTransport.EventsOf(exit).Single();
             Assert.Equal("game_exited", exitEvent["event"]);
-            Assert.Equal((double)leftAt, exitEvent["timestamp"]);
+            Assert.Equal((double)(leftAt * 1000), exitEvent["timestamp"]);
 
             Assert.Equal("tok_2", restart.Headers["X-Session-Token"]);
             Assert.Equal("game_started", FakeTransport.EventsOf(restart).Single()["event"]);
@@ -125,7 +125,7 @@ namespace RealitySE.Tests
             Assert.Equal("old_tok", first.Headers["X-Session-Token"]);
             Dictionary<string, object> exit = FakeTransport.EventsOf(first).Single();
             Assert.Equal("game_exited", exit["event"]);
-            Assert.Equal(1759990000.0, exit["timestamp"]);
+            Assert.Equal(1759990000000.0, exit["timestamp"]);
             Assert.Null(h.Storage.GetString(RavensightClient.BackgroundMarkerKey));
             Assert.Equal("/settings", FakeTransport.PathOf(h.Transport.Requests[1]));
         }

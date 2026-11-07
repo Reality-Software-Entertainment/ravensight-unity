@@ -63,17 +63,33 @@ namespace RealitySE
     {
         public string Name;
         public Dictionary<string, object> Data;
-        /// <summary>Unix seconds, captured when the event happened.</summary>
+        /// <summary>Unix milliseconds, captured when the event happened, never when it is sent.</summary>
         public long Timestamp;
+        /// <summary>
+        /// The /session answer's origin for the session this event belongs to,
+        /// stored exactly as received, or null when it is not known yet.
+        /// </summary>
+        public Dictionary<string, object> Origin;
+
         /// <summary>An automatic error capture: queued behind gameplay events and evicted first.</summary>
         internal bool Captured;
 
         public Dictionary<string, object> ToPayload()
         {
-            Dictionary<string, object> payload = new Dictionary<string, object>(3);
+            return ToPayload(null);
+        }
+
+        /// <summary>
+        /// The event as sent: event, data, timestamp, and origin when the event
+        /// belongs to a session other than <paramref name="currentSession"/>.
+        /// </summary>
+        public Dictionary<string, object> ToPayload(string currentSession)
+        {
+            Dictionary<string, object> payload = new Dictionary<string, object>(4);
             payload["event"] = Name;
             payload["data"] = Data ?? new Dictionary<string, object>();
             payload["timestamp"] = Timestamp;
+            if (Origin != null && RavensightJson.GetString(Origin, "session", null) != currentSession) payload["origin"] = Origin;
             return payload;
         }
     }
@@ -145,6 +161,25 @@ namespace RealitySE
         public RavensightPlaytestContext Playtest;
         /// <summary>Persistent storage. Null keeps everything in memory.</summary>
         public IRavensightStorage Storage;
+        /// <summary>
+        /// Where the persisted queue file lives (the Unity layer passes
+        /// Application.persistentDataPath/Ravensight). Null keeps the queue in
+        /// memory only.
+        /// </summary>
+        public string QueueDirectory;
+        /// <summary>
+        /// Marks a path excluded from iCloud and device backups and says
+        /// whether it worked. The queue's temporary file is marked before it
+        /// replaces the queue file; a failure is warned about (with no path or
+        /// contents) and retried once on the final file. The queue folder and
+        /// an existing file are marked at start. Null where there is no app
+        /// backup to opt out of; the Unity layer sets it on iOS.
+        /// </summary>
+        public Func<string, bool> ExcludeFromBackup;
+        /// <summary>Device fields sent on POST /session. Each is cleaned to at most 128 printable characters.</summary>
+        public string DeviceModel;
+        public string DeviceOsVersion;
+        public string DeviceGpu;
     }
 
     public struct RavensightInitResult
@@ -170,6 +205,10 @@ namespace RealitySE
         public int Dropped;
         public int Flushes;
         public int Sessions;
+        /// <summary>Events read back from the persisted queue at start.</summary>
+        public int Restored;
+        /// <summary>Persisted events dropped at start as older than 89 days.</summary>
+        public int Expired;
     }
 
     /// <summary>
@@ -184,7 +223,7 @@ namespace RealitySE
     /// </summary>
     public sealed partial class RavensightClient
     {
-        public const string SdkVersion = "0.4.0";
+        public const string SdkVersion = "0.5.0";
         /// <summary>The bare host. "/api/v1" is appended by <see cref="NormalizeApiUrl"/>.</summary>
         public const string DefaultApiUrl = "https://api.ravensight.io";
         /// <summary>Server hard limit on POST /track/batch.</summary>
@@ -195,8 +234,8 @@ namespace RealitySE
         public const int DefaultSessionTimeoutSeconds = 1800;
         /// <summary>A retry is never sooner than this, jitter included.</summary>
         public const int MinRetryMs = 500;
-        /// <summary>Retry waits are the backoff plus or minus this fraction.</summary>
-        public const double Jitter = 0.2;
+        /// <summary>Retry waits are the backoff times a random factor from this to 1.</summary>
+        public const double JitterFloor = 0.5;
         /// <summary>The largest event the API accepts: its data as JSON, in UTF-8 bytes.</summary>
         public const int MaxEventBytes = 8192;
         /// <summary>The longest distribution label sent.</summary>
@@ -367,6 +406,7 @@ namespace RealitySE
             }
 
             _status = EffectiveStatus(null);
+            OpenQueue();
         }
 
         private static long DefaultClock()
@@ -454,10 +494,13 @@ namespace RealitySE
             return hex.ToString();
         }
 
-        /// <summary>The size the server checks: the event's data as JSON, in UTF-8 bytes.</summary>
+        /// <summary>
+        /// The size the server checks: the event's data as JSON, in UTF-8 bytes,
+        /// with a typed error's message and stack counted one byte a character.
+        /// </summary>
         public static int EventBytes(Dictionary<string, object> data)
         {
-            return Encoding.UTF8.GetByteCount(RavensightJson.Write(data ?? new Dictionary<string, object>()));
+            return RavensightDelivery.EventDataBytes(data);
         }
 
         /// <summary>
@@ -667,6 +710,7 @@ namespace RealitySE
                 // The first yes in opt-in mode: only now is an id made.
                 DeviceId = LoadOrCreateDeviceId(_storage);
             }
+            if (on) OpenQueue();
             SetStatus(null);
             if (on) QueueGameStarted();
         }
@@ -747,13 +791,16 @@ namespace RealitySE
         {
             if (!IsActive) return;
             _backgroundedAtMs = _nowMs();
-            Observe(FlushCoreAsync(false, true));
+            PersistNow();
+            // A move to the background cuts a backoff wait short, never a Retry-After.
+            Observe(FlushCoreAsync(true, true));
 
             if (IsPlaytest || !IsSessionValid()) return;
-            Dictionary<string, object> marker = new Dictionary<string, object>(3);
+            Dictionary<string, object> marker = new Dictionary<string, object>(4);
             marker["sessionToken"] = SessionToken;
             marker["expiresAt"] = SessionExpiresAtMs / 1000L;
             marker["backgroundedAt"] = _backgroundedAtMs / 1000L;
+            if (_origin != null) marker["origin"] = _origin;
             _storage.SetString(BackgroundMarkerKey, RavensightJson.Write(marker));
             _storage.Save();
         }
@@ -784,6 +831,7 @@ namespace RealitySE
 
             string oldToken = IsSessionValid() ? SessionToken : null;
             InvalidateSession();
+            BeginSessionEpoch();
             _gameStartedQueued = false;
             _gameExitedQueued = false;
             _healthSent = false;
@@ -794,9 +842,9 @@ namespace RealitySE
 
             if (_config.TrackLifecycleEvents && oldToken != null)
             {
-                await SendExitAsync(oldToken, backgroundedAt / 1000L);
+                await SendExitAsync(oldToken, backgroundedAt, null);
             }
-            await FlushCoreAsync(false, true);
+            await FlushCoreAsync(true, true);
         }
 
         /// <summary>
@@ -819,7 +867,7 @@ namespace RealitySE
             PendingExit pending = TakeExitMarker();
             if (pending != null)
             {
-                await SendExitAsync(pending.Token, pending.BackgroundedAt);
+                await SendExitAsync(pending.Token, pending.BackgroundedAt * 1000L, pending.Origin);
             }
 
             if (IsActive)
@@ -860,6 +908,8 @@ namespace RealitySE
 
         public void Dispose()
         {
+            // What is still queued stays in the persisted queue for the next launch.
+            PersistNow();
             _disposed = true;
             ClearConfig(false);
             lock (_gate)
@@ -879,7 +929,7 @@ namespace RealitySE
         /// </summary>
         public bool Track(string eventName, Dictionary<string, object> data)
         {
-            return TrackAt(eventName, data, _nowMs() / 1000L);
+            return TrackAtMs(eventName, data, _nowMs());
         }
 
         public bool Track(string eventName)
@@ -968,10 +1018,16 @@ namespace RealitySE
         /// <summary>Queues an event with an explicit Unix seconds timestamp.</summary>
         public bool TrackAt(string eventName, Dictionary<string, object> data, long timestampSeconds)
         {
+            return TrackAtMs(eventName, data, timestampSeconds * 1000L);
+        }
+
+        /// <summary>Queues an event with an explicit Unix milliseconds timestamp.</summary>
+        public bool TrackAtMs(string eventName, Dictionary<string, object> data, long timestampMs)
+        {
             if (string.IsNullOrEmpty(eventName)) throw new ArgumentException("event name is required", "eventName");
             if (!IsActive) return false;
             TrailEvent(eventName);
-            return Enqueue(eventName, data, timestampSeconds, false);
+            return Enqueue(eventName, data, timestampMs, false);
         }
 
         /// <summary>
@@ -980,7 +1036,7 @@ namespace RealitySE
         /// queue is full a capture is evicted before any gameplay event; a
         /// capture that would evict gameplay is itself dropped.
         /// </summary>
-        private bool Enqueue(string eventName, Dictionary<string, object> data, long timestampSeconds, bool captured)
+        private bool Enqueue(string eventName, Dictionary<string, object> data, long timestampMs, bool captured)
         {
             if (!IsActive) return false;
 
@@ -990,7 +1046,8 @@ namespace RealitySE
             evt.Data = WithPlaytestTags(data);
             AddExposureTags(evt.Data);
             evt.Data[EventIdKey] = NextEventId();
-            evt.Timestamp = timestampSeconds;
+            evt.Timestamp = timestampMs;
+            evt.Origin = IsSessionValid() ? _origin : null;
 
             if (EventBytes(evt.Data) > MaxEventBytes)
             {
@@ -1005,29 +1062,16 @@ namespace RealitySE
             int count;
             lock (_gate)
             {
-                int cap = _config.MaxQueueSize > 0 ? _config.MaxQueueSize : DefaultQueueCap;
-                while (_queue.Count >= cap)
+                if (!EnqueueOrdered(evt))
                 {
-                    int evict = FirstCapturedIndex(0);
-                    if (evict < 0)
-                    {
-                        // Only gameplay is queued: a capture never displaces it.
-                        if (captured)
-                        {
-                            _stats.Dropped++;
-                            return false;
-                        }
-                        evict = 0; // drop oldest so the newest always survive
-                    }
-                    _queue.RemoveAt(evict);
                     _stats.Dropped++;
-                    if (evict < _inflightCount) _inflightCount--;
+                    return false;
                 }
-                int at = captured ? -1 : FirstCapturedIndex(_inflightCount);
-                if (at < 0) _queue.Add(evt);
-                else _queue.Insert(at, evt);
                 count = _queue.Count;
             }
+            // A capture may come just before the process ends: written at once.
+            if (captured) PersistNow();
+            else PersistSoon();
 
             if (count >= MaxBatchSize) Observe(FlushCoreAsync(false, true));
             return true;
@@ -1078,11 +1122,12 @@ namespace RealitySE
         /// </summary>
         public Task<RavensightFlushResult> FlushAsync()
         {
-            return FlushCoreAsync(false, false);
+            // An explicit flush cuts a backoff wait short, never a Retry-After.
+            return FlushCoreAsync(true, false);
         }
 
         /// <summary>
-        /// As <see cref="FlushAsync()"/>; force also skips the exponential
+        /// As <see cref="FlushAsync()"/>; false waits out the exponential
         /// backoff after a network failure. A Retry-After from the server is
         /// always honored.
         /// </summary>
@@ -1119,6 +1164,13 @@ namespace RealitySE
                 result.Skipped = RavensightReason.InvalidKey;
                 return result;
             }
+            if (_sendBlocked)
+            {
+                // A 403 on a track request: kept, and sent on the next launch.
+                result.Queued = QueueCount;
+                result.Skipped = "refused";
+                return result;
+            }
             if (QueueCount == 0) return result;
 
             lock (_gate)
@@ -1132,7 +1184,7 @@ namespace RealitySE
                 if ((!force || _retryAfterActive) && _nowMs() < _nextAttemptAtMs)
                 {
                     result.Queued = _queue.Count;
-                    result.Skipped = "backoff";
+                    result.Skipped = _retryAfterActive ? "retry_after" : "backoff";
                     return result;
                 }
                 _flushing = true;
@@ -1154,9 +1206,10 @@ namespace RealitySE
         {
             int sent = 0;
             int batchLimit = MaxBatchSize;
-            int reauthAttempts = 0;
+            int unauthorizedInRow = 0;
+            bool plainOnce = false;
 
-            while (IsActive)
+            while (IsActive && !_sendBlocked)
             {
                 if (_nowMs() < _nextAttemptAtMs) break;
                 if (QueueCount == 0) break;
@@ -1174,24 +1227,32 @@ namespace RealitySE
                 if (!IsActive) break;
 
                 List<RavensightEvent> batch;
+                string currentSession;
+                RavensightSigning signing;
                 lock (_gate)
                 {
                     if (_queue.Count == 0) break;
                     int size = Math.Min(batchLimit, _queue.Count);
                     batch = _queue.GetRange(0, size);
                     _inflightCount = size;
+                    currentSession = _origin == null ? null : RavensightJson.GetString(_origin, "session", null);
+                    signing = _signing;
                 }
 
                 List<object> payload = new List<object>(batch.Count);
-                for (int i = 0; i < batch.Count; i++) payload.Add(batch[i].ToPayload());
+                for (int i = 0; i < batch.Count; i++) payload.Add(batch[i].ToPayload(currentSession));
 
                 Dictionary<string, object> body = new Dictionary<string, object>(1);
                 body["events"] = payload;
+                string json = RavensightJson.Write(body);
 
-                RavensightResponse response = await Send(
-                    WithPlaytest(new RavensightRequest("POST", ApiUrl + "/track/batch", RavensightJson.Write(body))
-                        .WithHeader("Content-Type", "application/json")
-                        .WithHeader("X-Session-Token", token)));
+                RavensightRequest request = WithPlaytest(new RavensightRequest("POST", ApiUrl + "/track/batch", json)
+                    .WithHeader("Content-Type", "application/json")
+                    .WithHeader("X-Session-Token", token));
+                SignAndCompress(request, json, signing, !plainOnce);
+                bool compressed = request.RawBody != null;
+                plainOnce = false;
+                RavensightResponse response = await Send(request);
 
                 int accepted;
                 lock (_gate)
@@ -1200,7 +1261,10 @@ namespace RealitySE
                     _inflightCount = 0;
                 }
 
-                if (response.Status == 202)
+                int status = response.Status;
+                string code = response.ErrorCode(null);
+
+                if (status >= 200 && status < 300)
                 {
                     lock (_gate)
                     {
@@ -1211,78 +1275,99 @@ namespace RealitySE
                         _stats.Sent += batch.Count;
                         _stats.Flushes++;
                     }
+                    // The removal is stored before anything else happens.
+                    PersistNow();
                     sent += batch.Count;
                     batchLimit = MaxBatchSize;
-                    reauthAttempts = 0;
+                    unauthorizedInRow = 0;
                     ResetBackoff();
                     SetStatus(null);
                     continue;
                 }
 
-                if (response.Status == 401)
+                if (status == 400)
                 {
-                    // Session expired or revoked. The batch stays queued and is
-                    // re sent once a fresh session is issued, at most twice in a row.
+                    double index;
+                    if (RavensightJson.TryGetDouble(response.Json(), "index", out index) && index >= 0 && index < accepted && index == Math.Floor(index))
+                    {
+                        // The server named one event it will never take.
+                        DropRange((int)index, 1, code ?? "invalid");
+                        continue;
+                    }
+                    if (code == "batch_too_large")
+                    {
+                        if (batch.Count > 1)
+                        {
+                            batchLimit = Math.Max(1, batch.Count / 2);
+                            Emit("batch too large, splitting to " + batchLimit);
+                            continue;
+                        }
+                        DropRange(0, Math.Min(1, accepted), code);
+                        batchLimit = MaxBatchSize;
+                        continue;
+                    }
+                    // Any other 400: the request's events will never be accepted.
+                    DropRange(0, accepted, code ?? "bad_request");
+                    batchLimit = MaxBatchSize;
+                    continue;
+                }
+
+                if (status == 401)
+                {
+                    // Keep the events, open a new session once and resend with
+                    // the same ids. A second 401 in a row waits for the backoff.
                     InvalidateSession();
-                    reauthAttempts++;
-                    if (reauthAttempts > 2)
+                    unauthorizedInRow++;
+                    if (unauthorizedInRow >= 2)
                     {
                         ScheduleBackoff();
                         SetStatus(RavensightReason.SessionFailed);
                         break;
                     }
-                    Emit("session expired, re authenticating");
+                    Emit("session refused (" + (code ?? "401") + "), opening a new one");
                     continue;
                 }
 
-                if (response.Status == 403)
+                if (status == 403)
                 {
-                    HandleForbidden(response);
-                    break;
-                }
-
-                if (response.Status == 429)
-                {
-                    ApplyRetryAfter(response);
-                    SetStatus(RavensightReason.RateLimited);
-                    break;
-                }
-
-                if (response.Status == 400 || response.Status == 413)
-                {
-                    // A 413 (body too large) is handled like a 400: split, and
-                    // drop the one event the server will never take.
-                    if (batch.Count > 1)
+                    if (code == "playtest_job_closed" || code == "invalid_playtest_token")
                     {
-                        batchLimit = Math.Max(1, batch.Count / 2);
-                        Emit("batch rejected with HTTP " + response.Status + ", splitting to " + batchLimit);
+                        HandleForbidden(response);
+                        break;
+                    }
+                    // Keep the events and stop sending until the next launch.
+                    _sendBlocked = true;
+                    SetStatus(code == "tracking_disabled" ? RavensightReason.TrackingDisabled : RavensightReason.InvalidKey);
+                    WarnOnce("track_403", "Ravensight: the server refused a batch (" + (code ?? "403") +
+                                          "). Events are kept and sent on the next launch.");
+                    break;
+                }
+
+                if (status == 413 || status == 415)
+                {
+                    if (status == 415 && compressed)
+                    {
+                        plainOnce = true;
                         continue;
                     }
-                    // A single event the server will never take. Drop it so the
-                    // rest of the queue is not blocked behind it forever.
-                    lock (_gate)
+                    if (status == 413 && batch.Count > 1)
                     {
-                        if (accepted > 0 && _queue.Count > 0)
-                        {
-                            _queue.RemoveAt(0);
-                            _stats.Dropped++;
-                        }
+                        batchLimit = Math.Max(1, batch.Count / 2);
+                        continue;
                     }
+                    DropRange(0, accepted, "payload_too_large");
                     batchLimit = MaxBatchSize;
-                    WarnOnce("dropped_400", "Ravensight: the server refused an event (HTTP 400) and it was dropped. " +
-                                            "Check the event name and data size.");
-                    Emit("dropped one event rejected with HTTP " + response.Status);
                     continue;
                 }
 
-                if (response.Status == 503)
+                if (status == 429 || (status == 503 && response.RetryAfterMs() > 0))
                 {
                     ApplyRetryAfter(response);
+                    SetStatus(status == 429 ? RavensightReason.RateLimited : RavensightReason.Offline);
+                    break;
                 }
-                else
-                {
-                    ScheduleBackoff();
-                }
+
+                ScheduleBackoff();
                 SetStatus(RavensightReason.Offline);
                 break;
             }
@@ -1291,6 +1376,23 @@ namespace RealitySE
             result.Sent = sent;
             result.Queued = QueueCount;
             return result;
+        }
+
+        /// <summary>Drops events the server refused for good, and stores the removal.</summary>
+        private void DropRange(int index, int count, string code)
+        {
+            if (count <= 0) return;
+            lock (_gate)
+            {
+                if (index >= _queue.Count) return;
+                int n = Math.Min(count, _queue.Count - index);
+                _queue.RemoveRange(index, n);
+                _stats.Dropped += n;
+            }
+            PersistNow();
+            WarnOnce("dropped_400", "Ravensight: the server refused an event (" + code + ") and it was dropped. " +
+                                    "Check the event name and data size.");
+            Emit("dropped " + count + " event(s) the server refused (" + code + ")");
         }
 
         // --- Feedback and suggestions -------------------------------------------
@@ -1473,6 +1575,8 @@ namespace RealitySE
                 body["sdk"] = "unity/" + SdkVersion;
                 if (joinToken != null) body["joinToken"] = joinToken;
                 if (_distribution != null) body["distribution"] = _distribution;
+                Dictionary<string, object> device = DeviceFields();
+                if (device != null) body["device"] = device;
 
                 RavensightResponse response = await Send(
                     WithPlaytest(new RavensightRequest("POST", ApiUrl + "/session", RavensightJson.Write(body))
@@ -1495,7 +1599,9 @@ namespace RealitySE
                         SessionToken = token;
                         SessionExpiresAtMs = ResolveExpiryMs(parsed);
                         _stats.Sessions++;
+                        AdoptSessionAnswer(parsed);
                     }
+                    PersistSoon();
                     if (joinToken != null && _joinToken == joinToken) _joinToken = null;
                     _invalidKey = false;
                     ResetBackoff();
@@ -1574,6 +1680,7 @@ namespace RealitySE
         {
             public string Token;
             public long BackgroundedAt;
+            public Dictionary<string, object> Origin;
         }
 
         /// <summary>Reads and deletes the saved background marker. Null when there is nothing to send.</summary>
@@ -1593,22 +1700,37 @@ namespace RealitySE
             if (string.IsNullOrEmpty(token)) return null;
             if (!RavensightJson.TryGetDouble(parsed, "expiresAt", out expiresAt)) return null;
             if (!RavensightJson.TryGetDouble(parsed, "backgroundedAt", out backgroundedAt)) return null;
-            if ((long)(expiresAt * 1000d) <= _nowMs()) return null;
+            object rawOrigin;
+            Dictionary<string, object> origin = RavensightJson.AsObject(parsed) != null &&
+                RavensightJson.AsObject(parsed).TryGetValue("origin", out rawOrigin) ? RavensightJson.AsObject(rawOrigin) : null;
+            if ((long)(expiresAt * 1000d) <= _nowMs())
+            {
+                // The old session has expired: queue the exit under its origin,
+                // so the server still stores it under the run that ended.
+                if (origin != null) QueueExitWithOrigin((long)backgroundedAt * 1000L, origin);
+                return null;
+            }
 
             PendingExit pending = new PendingExit();
             pending.Token = token;
             pending.BackgroundedAt = (long)backgroundedAt;
+            pending.Origin = origin;
             return pending;
         }
 
-        /// <summary>One POST /track/batch carrying only game_exited, under the given session. No retry.</summary>
-        private async Task SendExitAsync(string sessionToken, long timestampSeconds)
+        /// <summary>
+        /// One POST /track/batch carrying only game_exited, under the given
+        /// session. Not delivered, it joins the persisted queue under its
+        /// origin when there is one, so the next flush still sends it.
+        /// </summary>
+        private async Task SendExitAsync(string sessionToken, long timestampMs, Dictionary<string, object> origin)
         {
             RavensightEvent exit = new RavensightEvent();
             exit.Name = "game_exited";
             exit.Data = WithPlaytestTags(new Dictionary<string, object>());
             exit.Data[EventIdKey] = NextEventId();
-            exit.Timestamp = timestampSeconds;
+            exit.Timestamp = timestampMs;
+            exit.Origin = origin;
 
             List<object> events = new List<object>(1);
             events.Add(exit.ToPayload());
@@ -1620,12 +1742,13 @@ namespace RealitySE
                     .WithHeader("Content-Type", "application/json")
                     .WithHeader("X-Session-Token", sessionToken)));
 
-            if (response.Status == 202)
+            if (response.Status >= 200 && response.Status < 300)
             {
                 lock (_gate) { _stats.Sent++; }
                 return;
             }
             if (response.Status == 403) HandleForbidden(response);
+            else if (origin != null && response.Status != 400) EnqueueRestored(exit);
             Emit("exit report not delivered (HTTP " + response.Status + ")");
         }
 
@@ -1722,6 +1845,7 @@ namespace RealitySE
                 _queue.Clear();
                 _inflightCount = 0;
             }
+            PersistNow();
             // Opt-out, reset, disable and a stopped run forget the trail and boot errors too.
             ClearErrorTrail();
         }
@@ -1757,9 +1881,9 @@ namespace RealitySE
         }
 
         /// <summary>
-        /// The next wait is the backoff plus or minus 20 percent, so many
-        /// copies of a game that lost the network together do not come back
-        /// together. Never under half a second, never over 5 minutes. A
+        /// The next wait is the backoff times a random factor in [0.5, 1), so
+        /// many copies of a game that lost the network together do not come
+        /// back together. Never under half a second, never over 5 minutes. A
         /// server's Retry-After is applied exactly, elsewhere.
         /// </summary>
         private void ScheduleBackoff()
@@ -1769,12 +1893,12 @@ namespace RealitySE
             _backoffMs = Math.Min(_backoffMs * 2, MaxBackoffMs);
         }
 
-        /// <summary>The jittered wait for a backoff step. random is 0 &lt;= x &lt; 1; 0.5 returns the step itself.</summary>
+        /// <summary>The jittered wait for a backoff step. random is 0 &lt;= x &lt; 1; 0.5 gives three quarters of the step.</summary>
         public static long JitteredWaitMs(int backoffMs, double random)
         {
             if (double.IsNaN(random) || random < 0) random = 0;
             if (random >= 1) random = 1;
-            double factor = 1 - Jitter + 2 * Jitter * random;
+            double factor = JitterFloor + (1 - JitterFloor) * random;
             long wait = (long)Math.Round(backoffMs * factor);
             if (wait > MaxBackoffMs) wait = MaxBackoffMs;
             if (wait < MinRetryMs) wait = MinRetryMs;

@@ -27,7 +27,7 @@ namespace RealitySE.Tests
         public void DefaultIsTheBareHost()
         {
             Assert.Equal("https://api.ravensight.io", RavensightClient.DefaultApiUrl);
-            Assert.Equal("0.4.0", RavensightClient.SdkVersion);
+            Assert.Equal("0.5.0", RavensightClient.SdkVersion);
         }
 
         [Fact]
@@ -129,7 +129,7 @@ namespace RealitySE.Tests
 
             h.Clock.Advance(6999);
             RavensightFlushResult early = await client.FlushAsync(true);
-            Assert.Equal("backoff", early.Skipped);
+            Assert.Equal("retry_after", early.Skipped);
             Assert.Equal(before, h.Transport.Requests.Count);
 
             limited = false;
@@ -158,11 +158,11 @@ namespace RealitySE.Tests
             h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(0, null);
             RavensightClient client = await h.Started();
             Assert.Equal(RavensightReason.Offline, client.StatusReason);
-            Assert.Equal(10000, client.RetryInMs);
+            Assert.Equal(7500, client.RetryInMs); // 10 seconds times the jitter factor (0.75 at random 0.5)
 
-            h.Clock.Advance(10000);
+            h.Clock.Advance(7500);
             await client.FlushAsync();
-            Assert.Equal(20000, client.RetryInMs);
+            Assert.Equal(15000, client.RetryInMs);
             Assert.Equal(1, client.QueueCount);
         }
 
@@ -173,7 +173,7 @@ namespace RealitySE.Tests
             h.Transport.Routes["/track/batch"] = r =>
             {
                 List<Dictionary<string, object>> events = FakeTransport.EventsOf(r);
-                if (events.Any(e => (string)e["event"] == "poison")) return FakeTransport.Json(400, "{\"error\":\"invalid_event\"}");
+                if (events.Any(e => (string)e["event"] == "poison")) return FakeTransport.Json(400, "{\"error\":\"batch_too_large\"}");
                 return FakeTransport.Json(202, "{}");
             };
             RavensightConfig config = h.Config();
@@ -231,14 +231,14 @@ namespace RealitySE.Tests
         }
 
         [Fact]
-        public async Task BatchUnauthorizedReopensTheSessionAtMostTwiceThenBacksOff()
+        public async Task BatchUnauthorizedReopensTheSessionOnceThenBacksOff()
         {
             Harness h = new Harness();
             h.Transport.Routes["/track/batch"] = r => FakeTransport.Json(401, "{\"error\":\"invalid_session\"}");
             RavensightClient client = await h.Started();
 
-            Assert.Equal(3, h.Transport.To("/track/batch").Count);
-            Assert.Equal(3, h.Transport.To("/session").Count); // the first plus two re-opens
+            Assert.Equal(2, h.Transport.To("/track/batch").Count);
+            Assert.Equal(2, h.Transport.To("/session").Count); // the first plus one re-open
             Assert.True(client.RetryInMs > 0);
             Assert.Equal(1, client.QueueCount);
         }
