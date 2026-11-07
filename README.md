@@ -88,7 +88,7 @@ Or add it to `Packages/manifest.json` yourself:
 }
 ```
 
-To pin a version, append a release tag such as `#v0.4.0` to the URL once that
+To pin a version, append a release tag such as `#v0.5.0` to the URL once that
 tag exists.
 
 **Upgrading from a copied 0.2.0.** If you followed the 0.2.0 workaround and

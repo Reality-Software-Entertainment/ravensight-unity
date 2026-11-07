@@ -1,8 +1,9 @@
-## Unreleased
+## [0.5.0] - 2026-11-06
 
 Follows the platform's SDK delivery, ads and attribution, exposure and device
-contracts. The server releases for them ship first; see "Server
-prerequisites".
+contracts. Needs a Ravensight server that accepts origins, signatures, gzip bodies,
+`rs_exposure` and the `rs_ad_*` and `rs_attr_*` keys; the hosted service at
+ravensight.io runs one.
 
 ### Changes for 0.4.0 games
 
@@ -35,8 +36,8 @@ prerequisites".
   whose session expired is queued under its origin.
 * gzip for batches of 1,024 bytes or more; request signing when the session
   answers with `signing`, secret in memory only.
-* `EventBytes` measures as the server does: a typed error's message and stack
-  count one byte a character.
+* `EventBytes` measures as the server does: a typed error's message, stack
+  and trail count one byte a character.
 * `TrackAd`, `TrackAdRevenue`, `TrackAdRevenueFromMediation`,
   `TrackAdMobPaidEvent`, `SetAttribution` (once per device) and
   `RavensightDelivery.MicrosFromDecimalString`, `MicrosFromRevenue`,
@@ -55,12 +56,6 @@ prerequisites".
   game adds.
 * A full queue never evicts a capture inside a batch in flight (0.4.0 could).
 
-### Server prerequisites
-
-* `rs_exposure` must be in `SDK_AUTOMATIC_EVENTS` before release, or a public
-  key's allowlist refuses it.
-* The Phase 2 delivery release and the Phase 5 `rs_ad_*` and `rs_attr_*`
-  keys must be deployed first.
 
 ## 0.3.1 (held)
 
