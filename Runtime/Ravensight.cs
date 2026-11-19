@@ -115,6 +115,9 @@ namespace RealitySE
         private static readonly object PendingGate = new object();
         private static readonly List<PendingEvent> PendingEvents = new List<PendingEvent>();
         private static bool? _pendingEnabled;
+        // An Identify made before the component woke: memory only, handed to
+        // the client when it starts.
+        private static string _pendingIdentify;
         private static RavensightPlaytestContext _explicitPlaytest;
 
         // Seams for the package's Play Mode tests (InternalsVisibleTo), so a
@@ -247,6 +250,7 @@ namespace RealitySE
             ConfigReady = null;
             LastInitResult = null;
             _pendingEnabled = null;
+            _pendingIdentify = null;
             _explicitPlaytest = null;
             lock (PendingGate) { PendingEvents.Clear(); }
         }
@@ -400,6 +404,7 @@ namespace RealitySE
             {
                 Debug.LogWarning("Ravensight: could not start (" + e.Message + "). Tracking is off.");
                 ClearPendingEvents();
+                _pendingIdentify = null;
                 return;
             }
 
@@ -423,6 +428,7 @@ namespace RealitySE
             _bootMs = Time.realtimeSinceStartup * 1000.0;
             _client.Begin();
             ReplayPendingEvents();
+            ApplyPendingIdentify();
 
             // With a key and consent the hooks go in now, so errors during
             // boot are held (at most 5) until the settings or session answer
@@ -479,6 +485,8 @@ namespace RealitySE
             _client.Warn = message => Debug.LogWarning(message);
             _client.ReportStartupProblems();
             ClearPendingEvents();
+            // Held in memory only: an inert client never saves or sends it.
+            ApplyPendingIdentify();
             RavensightInitResult result = new RavensightInitResult();
             result.Reason = RavensightReason.NoKey;
             LastInitResult = result;
@@ -935,6 +943,84 @@ namespace RealitySE
             }
             ClearPendingEvents();
             return RavensightClient.ResetStoredDeviceId(new RavensightPlayerPrefsStorage());
+        }
+
+        // --- Identify players who sign in ----------------------------------------
+
+        /// <summary>
+        /// Links this device to your game's own account id after the player
+        /// signs in, so one person on two devices, or before and after sign-in,
+        /// counts as one player. Only a salted hash of the id is sent, once per
+        /// session with the session token; the raw id is never sent or saved.
+        /// Throws ArgumentException (nothing changed) for null, an empty id, one
+        /// over 256 UTF-8 bytes, or one containing '@' (emails and handles).
+        /// Signing in as another account calls <see cref="ResetIdentity"/> first.
+        /// Callable before the component wakes; it applies when it does.
+        /// </summary>
+        public static void Identify(string accountId)
+        {
+            RavensightClient client = Client;
+            if (client != null)
+            {
+                client.Identify(accountId);
+                return;
+            }
+            string refusal = RavensightClient.IdentifyRefusal(accountId);
+            if (refusal != null)
+            {
+                throw new ArgumentException(
+                    "Ravensight: identify refused (" + refusal + "): an account id is 1 to 256 bytes of text with no @. Nothing changed.",
+                    "accountId");
+            }
+            _pendingIdentify = accountId;
+        }
+
+        /// <summary>
+        /// For sign-out: forgets the saved identity and switches to a fresh
+        /// device id, exactly like <see cref="ResetDeviceId"/>, so the next
+        /// player on this device is not linked to the account. Sends nothing.
+        /// With no identity saved it does nothing.
+        /// </summary>
+        public static void ResetIdentity()
+        {
+            RavensightClient client = Client;
+            if (client != null)
+            {
+                client.ResetIdentity();
+                return;
+            }
+            bool held = _pendingIdentify != null;
+            _pendingIdentify = null;
+            if (IsPlaytest) return;
+            RavensightPlayerPrefsStorage storage = new RavensightPlayerPrefsStorage();
+            bool saved = storage.GetString(RavensightClient.IdentityKey) != null;
+            if (!saved && !held) return;
+            if (saved)
+            {
+                storage.DeleteKey(RavensightClient.IdentityKey);
+                storage.Save();
+            }
+            ResetDeviceId();
+        }
+
+        /// <summary>
+        /// True while an identity is saved, or an Identify waits for the session.
+        /// The account id itself can never be read back.
+        /// </summary>
+        public static bool IsIdentified
+        {
+            get
+            {
+                RavensightClient client = Client;
+                return client != null ? client.IsIdentified : _pendingIdentify != null;
+            }
+        }
+
+        private void ApplyPendingIdentify()
+        {
+            string accountId = _pendingIdentify;
+            _pendingIdentify = null;
+            if (accountId != null && _client != null) _client.Identify(accountId);
         }
 
         // --- Helpers ----------------------------------------------------------
