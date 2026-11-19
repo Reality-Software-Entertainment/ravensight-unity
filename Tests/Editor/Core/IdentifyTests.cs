@@ -691,6 +691,75 @@ namespace RealitySE.Tests
             Assert.Empty(h.Transport.Requests);
         }
 
+        // --- no_session in a row (the same rule as the other six SDKs) ------------------
+
+        private static Func<RavensightRequest, RavensightResponse> Script(params int[] noSessionOr503)
+        {
+            int index = 0;
+            return r =>
+            {
+                if (index >= noSessionOr503.Length) return FakeTransport.Json(200, "{\"playerId\":\"px_0\"}");
+                int next = noSessionOr503[index++];
+                return next == 400
+                    ? FakeTransport.Json(400, "{\"error\":\"no_session\"}")
+                    : FakeTransport.Json(next, "{}");
+            };
+        }
+
+        /// <summary>A fresh session; the identity is kept.</summary>
+        private static async Task NextSession(RavensightClient client)
+        {
+            client.ResetDeviceId();
+            await OpenSession(client);
+        }
+
+        [Fact]
+        public async Task TwoNoSessionAnswersInARowStopIdentify()
+        {
+            var (h, server) = Setup();
+            server.IdentifyAnswer = Script(400, 400);
+            RavensightClient client = await h.Started();
+            string status = client.StatusReason;
+            client.Identify("u1");
+            Assert.Single(Sends(h));
+            await NextSession(client); // the first no_session: tried once at the next session
+            Assert.Equal(2, Sends(h).Count);
+            await NextSession(client); // a second in a row: stopped
+            await NextSession(client);
+            Assert.Equal(2, Sends(h).Count);
+            Assert.True(client.IsIdentified);
+            Assert.Equal(status, client.StatusReason);
+        }
+
+        [Fact]
+        public async Task NoSessionThenAnotherAnswerThenNoSessionDoesNotStop()
+        {
+            var (h, server) = Setup();
+            server.IdentifyAnswer = Script(400, 503, 400);
+            RavensightClient client = await h.Started();
+            client.Identify("u1");
+            await NextSession(client);
+            await NextSession(client);
+            await NextSession(client);
+            Assert.Equal(4, Sends(h).Count);
+        }
+
+        [Fact]
+        public async Task ResetIdentityTurnsIdentifyBackOnAfterNoSessionStoppedIt()
+        {
+            var (h, server) = Setup();
+            server.IdentifyAnswer = Script(400, 400);
+            RavensightClient client = await h.Started();
+            client.Identify("u1");
+            await NextSession(client);
+            await NextSession(client);
+            Assert.Equal(2, Sends(h).Count);
+            client.ResetIdentity();
+            Assert.True(client.Identify("u1"));
+            await OpenSession(client);
+            Assert.Equal(3, Sends(h).Count);
+        }
+
         // --- a late answer ------------------------------------------------------------
 
         /// <summary>Holds the first /identify answer until the test releases it.</summary>
