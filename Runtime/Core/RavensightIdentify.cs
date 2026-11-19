@@ -26,6 +26,8 @@ namespace RealitySE
         private string _identifyDoneToken;
         private bool _identifyNoSalt;
         private bool _identifyStopped;
+        private int _identifyNoSessionCount;
+        private bool _identifyNoSessionStopped;
         private int _identifyGeneration;
 
         /// <summary>
@@ -134,6 +136,9 @@ namespace RealitySE
         /// </summary>
         public void ResetIdentity()
         {
+            // A sign-out turns identify back on after no_session stopped it.
+            _identifyNoSessionCount = 0;
+            _identifyNoSessionStopped = false;
             // A saved identity this client never read (no key, or before
             // consent) is signed out too.
             bool onDisk = !IsPlaytest && _storage.GetString(IdentityKey) != null;
@@ -143,6 +148,8 @@ namespace RealitySE
 
         private void ResetIdentityCore()
         {
+            _identifyNoSessionCount = 0;
+            _identifyNoSessionStopped = false;
             ForgetIdentity();
             ResetDeviceId();
         }
@@ -269,7 +276,7 @@ namespace RealitySE
         /// <summary>One POST /identify for the current session. Each session is tried once, whatever the answer.</summary>
         private async Task SendIdentifyAsync()
         {
-            if (_identityHash == null || _identifyStopped || _identifyNoSalt || IsPlaytest || !IsActive) return;
+            if (_identityHash == null || _identifyStopped || _identifyNoSessionStopped || _identifyNoSalt || IsPlaytest || !IsActive) return;
             // The token the session answer returned, as held; no expiry check
             // against this device's clock.
             string token = SessionToken;
@@ -289,6 +296,22 @@ namespace RealitySE
             // A late answer for an identity or a session that is gone changes nothing.
             if (generation != _identifyGeneration || token != SessionToken || _disposed) return;
             string code = response.ErrorCode(null);
+            // no_session: the first is tried once at the next session, a second
+            // in a row stops identify until ResetIdentity. Any other answer
+            // resets the count.
+            if (response.Status == 400 && code == "no_session")
+            {
+                if (++_identifyNoSessionCount >= 2)
+                {
+                    _identifyNoSessionStopped = true;
+                    Emit("identify refused twice in a row (no_session); not tried again until ResetIdentity");
+                    return;
+                }
+            }
+            else
+            {
+                _identifyNoSessionCount = 0;
+            }
             if (response.Status >= 200 && response.Status < 300)
             {
                 Emit("identified this session");
