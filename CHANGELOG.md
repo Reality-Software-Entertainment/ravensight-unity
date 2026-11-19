@@ -19,6 +19,14 @@ server whose session answer carries `identify.salt` and that offers
   first, and opt-out and consent withdrawn forget it. `SetEnabled(false)`
   keeps it. A playtest run keeps it in memory and sends nothing.
 * The contract's binding vectors in `Tests/Editor/Core/identify-vectors.json`.
+* Campaign links: `Ravensight.SetCampaignLink(id)` (also on `RavensightClient`)
+  sends a Ravensight campaign link id once, as `campaignLink` on the next
+  `POST /session`, from a deep link, App Link or install referrer the game
+  handles; a WebGL build reads `rs_link` from the page address by itself
+  (`Plugins/WebGL`). Only a 24 character hex id is taken, sent lower case.
+  It is never stored, only a session the server opens clears it, a playtest
+  run or a joined session never sends it, and consent applies as to
+  everything else.
 
 ## [0.5.0] - 2026-11-06
 

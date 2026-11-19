@@ -50,3 +50,24 @@ Screenshot Player Reports: 119 .NET core tests passed. All Runtime C# sources, i
 - Not run in the Unity Editor or its Test Runner, and not on a device. The new
   `.meta` files were written by hand with fresh GUIDs, not by the Editor.
 - No live Ravensight service was used. Nothing was published, tagged or deployed.
+
+### Campaign links (same 0.6.0)
+
+- Branch `feat/campaign-link`, on `feat/identify` at a69745a, built to the
+  campaign link contract (the JS SDK is the reference).
+- `Tools/test.sh` (.NET, engine free): **301 passed**, 0 failed, 64 of them
+  campaign link cases (`Tests/Editor/Core/CampaignLinkTests.cs`): the
+  `rs_link` parsing table, validation, once per session, kept after a failed
+  or token-less answer, opt in, opt out, disabled, no key, a playtest run
+  and a joined session.
+- `Tools/compile-check.sh`: Runtime/Core compiles as C# 7.3 for
+  netstandard2.0, 0 warnings. All Runtime sources compile against the Unity
+  6000.6.5f1 Editor engine assemblies, and again against its WebGL player
+  assemblies with `UNITY_WEBGL` defined, so the jslib import compiles; 0
+  warnings either way.
+- `Plugins/WebGL/RavensightLandingSearch.jslib` was loaded on a host with
+  stand-ins for the Emscripten helpers and returned `location.search`
+  unchanged (the `#` part excluded), and an empty string with no `window` or
+  a throwing `location`. It has not run in a WebGL player or a browser.
+- Not run in the Unity Editor or its Test Runner, and not on a device. The new
+  `.meta` files were written by hand with fresh GUIDs, not by the Editor.
