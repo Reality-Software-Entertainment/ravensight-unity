@@ -403,6 +403,9 @@ namespace RealitySE
                     _storage.DeleteKey(BackgroundMarkerKey);
                     _storage.Save();
                 }
+                // Opted out (or not yet opted in): no identity is kept.
+                if (_optedOut) DeleteSavedIdentity();
+                else LoadIdentity();
             }
 
             _status = EffectiveStatus(null);
@@ -609,9 +612,10 @@ namespace RealitySE
                 }
                 if (value == _enabled) return;
                 _enabled = value;
-                if (!value) { ClearConfig(true); ClearQueue(); }
+                if (!value) { ClearConfig(true); ClearQueue(); ForgetIdentity(); }
                 SetStatus(null);
                 if (value) QueueGameStarted();
+                if (value) SettleIdentity();
             }
         }
 
@@ -695,6 +699,8 @@ namespace RealitySE
             // Saved even while inert or switched off, so a settings toggle
             // always shows the player's real choice.
             WriteTrackingChoice(_storage, on, _config.Consent);
+            // Opt-out or consent withdrawn: the identity and a held id go.
+            if (!on) ForgetIdentity();
             if (_inert) return;
             if (_optedOut == !on) return;
             _optedOut = !on;
@@ -713,6 +719,7 @@ namespace RealitySE
             if (on) OpenQueue();
             SetStatus(null);
             if (on) QueueGameStarted();
+            if (on) SettleIdentity();
         }
 
         /// <summary>
@@ -1607,6 +1614,7 @@ namespace RealitySE
                     ResetBackoff();
                     SetStatus(null);
                     ApplyErrorCaptureSettings(parsed);
+                    AdoptIdentifyAnswer(parsed);
                     Emit("session ready");
                     await FetchConfigAsync();
                     return token;
