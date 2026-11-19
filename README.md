@@ -660,6 +660,41 @@ Product Interaction as not linked to the player and not used for tracking,
 and needs no tracking permission prompt. The row by row answers for the App
 Store and Google Play forms are at https://ravensight.io/docs/#privacy-label.
 
+## Identify players who sign in
+
+If your game has its own accounts, tell Ravensight who signed in, so one
+person on two devices, or before and after sign-in, counts as one player:
+
+```csharp
+Ravensight.Identify(account.Id);   // after your own sign-in succeeds
+Ravensight.ResetIdentity();        // on sign-out
+```
+
+* **What is sent:** a salted hash of the account id (HMAC-SHA256 with your
+  game's own salt, which the session answer gives the SDK) and the session
+  token, once per session. The raw account id is never sent and never saved;
+  emails and names are never sent.
+* **Checked on the device:** the id must not be null or empty, must be at
+  most 256 bytes of UTF-8 and must not contain `@`, so an email or a handle
+  is refused with an `ArgumentException` and nothing changes. It is used
+  exactly as given (never trimmed).
+* **Remembered:** only the hash and the salt, in `PlayerPrefs` under
+  `ravensight_identity`, so the next launch identifies its session without
+  another call. `Ravensight.IsIdentified` says whether one is set.
+* **`ResetIdentity()`** on sign-out forgets it and switches to a fresh
+  device id, exactly like `ResetDeviceId()`, so the next player on this
+  device is not linked to the account. `ResetDeviceId()` alone keeps it.
+* **Signing in as another account** calls `ResetIdentity()` for you first.
+* **Consent:** without a key, or with Consent set to Opt In before the
+  player's yes, the id waits in memory and nothing is sent. Opting out, or
+  `SetEnabled(false)`, forgets it. You can call `Identify` before the
+  component wakes.
+* **Cost:** one event on your usage meter per identified session. The
+  request never holds up your events.
+
+A game that calls `Identify` links its data to the player's account: answer
+the store privacy forms that way.
+
 ## Telling players
 
 You do not need a permission prompt, but saying what the game sends is good
