@@ -176,6 +176,13 @@ namespace RealitySE
         /// backup to opt out of; the Unity layer sets it on iOS.
         /// </summary>
         public Func<string, bool> ExcludeFromBackup;
+        /// <summary>
+        /// A web build's landing query string (the page's location.search),
+        /// which the Unity layer reads once in a WebGL player; null everywhere
+        /// else. Only its first rs_link is used: a Ravensight campaign link id,
+        /// sent once with the first session. See <see cref="RavensightClient.SetCampaignLink"/>.
+        /// </summary>
+        public string LandingSearch;
         /// <summary>Device fields sent on POST /session. Each is cleaned to at most 128 printable characters.</summary>
         public string DeviceModel;
         public string DeviceOsVersion;
@@ -348,6 +355,9 @@ namespace RealitySE
             _joinToken = string.IsNullOrEmpty(config.JoinToken) || config.JoinToken.Trim().Length == 0
                 ? null
                 : config.JoinToken.Trim();
+            // The campaign link this web page was reached by, if any. Read once,
+            // here; the page address is left as it is and nothing is saved.
+            _campaignLink = CampaignLinkFromSearch(config.LandingSearch);
 
             if (string.IsNullOrEmpty(config.IngestKey) || config.IngestKey.Trim().Length == 0)
             {
@@ -1587,6 +1597,10 @@ namespace RealitySE
                 if (_distribution != null) body["distribution"] = _distribution;
                 Dictionary<string, object> device = DeviceFields();
                 if (device != null) body["device"] = device;
+                // The player's own session only, never a playtest run or a
+                // joined session, and once: only a 201 with a token clears it.
+                string campaignLink = CampaignLinkForSession(joinToken);
+                if (campaignLink != null) body["campaignLink"] = campaignLink;
 
                 RavensightResponse response = await Send(
                     WithPlaytest(new RavensightRequest("POST", ApiUrl + "/session", RavensightJson.Write(body))
@@ -1600,6 +1614,8 @@ namespace RealitySE
                 {
                     lock (_gate)
                     {
+                        // The server has the link now, whatever happens to this session.
+                        CampaignLinkDelivered(campaignLink);
                         if (generation != _sessionGeneration || _disposed)
                         {
                             // Reset or disposed while this was in flight: the
