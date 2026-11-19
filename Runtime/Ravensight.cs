@@ -952,27 +952,23 @@ namespace RealitySE
         /// signs in, so one person on two devices, or before and after sign-in,
         /// counts as one player. Only a salted hash of the id is sent, once per
         /// session with the session token; the raw id is never sent or saved.
-        /// Throws ArgumentException (nothing changed) for null, an empty id, one
-        /// over 256 UTF-8 bytes, or one containing '@' (emails and handles).
-        /// Signing in as another account calls <see cref="ResetIdentity"/> first.
-        /// Callable before the component wakes; it applies when it does.
+        /// Returns false, with one warning, and changes nothing for null, an
+        /// empty id, one over 256 UTF-8 bytes, or one containing '@' (emails and
+        /// handles). Signing in as another account calls <see cref="ResetIdentity"/>
+        /// first. Callable before the component wakes; it applies when it does.
         /// </summary>
-        public static void Identify(string accountId)
+        public static bool Identify(string accountId)
         {
             RavensightClient client = Client;
-            if (client != null)
-            {
-                client.Identify(accountId);
-                return;
-            }
+            if (client != null) return client.Identify(accountId);
             string refusal = RavensightClient.IdentifyRefusal(accountId);
             if (refusal != null)
             {
-                throw new ArgumentException(
-                    "Ravensight: identify refused (" + refusal + "): an account id is 1 to 256 bytes of text with no @. Nothing changed.",
-                    "accountId");
+                Debug.LogWarning("Ravensight: identify refused (" + refusal + "): an account id is 1 to 256 bytes of text with no @. Nothing changed.");
+                return false;
             }
             _pendingIdentify = accountId;
+            return true;
         }
 
         /// <summary>

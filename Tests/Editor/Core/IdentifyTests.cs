@@ -113,19 +113,13 @@ namespace RealitySE.Tests
             await client.FlushAsync();
         }
 
-        private static ArgumentException Refused(Action call)
+        /// <summary>A refusal: false and exactly one warning naming the reason; never an exception.</summary>
+        private static string Refused(Harness h, Func<bool> call)
         {
-            try
-            {
-                call();
-            }
-            catch (ArgumentException e)
-            {
-                if (e.GetType() == typeof(ArgumentException)) return e;
-                throw;
-            }
-            Assert.True(false, "expected an ArgumentException, nothing was thrown");
-            return null;
+            int before = h.Warnings.Count;
+            Assert.False(call());
+            Assert.Equal(before + 1, h.Warnings.Count);
+            return h.Warnings[h.Warnings.Count - 1];
         }
 
         // --- 1. accept vectors ------------------------------------------------------
@@ -200,9 +194,8 @@ namespace RealitySE.Tests
                 RavensightClient client = await h.Started();
                 string device = client.DeviceId;
                 int writes = h.Storage.Writes;
-                ArgumentException refused = Refused(() => client.Identify(id));
-                Assert.Equal("accountId", refused.ParamName);
-                Assert.True(refused.Message.Contains(reason), refused.Message);
+                string warning = Refused(h, () => client.Identify(id));
+                Assert.True(warning.Contains(reason), warning);
                 Assert.False(client.IsIdentified);
                 await OpenSession(client);
                 Assert.Empty(Sends(h));
@@ -221,8 +214,8 @@ namespace RealitySE.Tests
             client.Identify("u1");
             string before = h.Storage.GetString(RavensightClient.IdentityKey);
             Assert.NotNull(before);
-            Refused(() => client.Identify(new string('a', 257)));
-            Refused(() => client.Identify(""));
+            Refused(h, () => client.Identify(new string('a', 257)));
+            Refused(h, () => client.Identify(""));
             Assert.Equal(before, h.Storage.GetString(RavensightClient.IdentityKey));
             Assert.True(client.IsIdentified);
         }
@@ -272,7 +265,7 @@ namespace RealitySE.Tests
 
             // 4: an email is refused; nothing changes.
             var s4 = Step(4, "identify(\"player@example.com\")");
-            Refused(() => client.Identify("player@example.com"));
+            Refused(h, () => client.Identify("player@example.com"));
             Assert.Equal(2, Sends(h).Count);
             Assert.Equal(ExpectedStored(s4), StoredHash(h));
             Assert.Equal(device, client.DeviceId);
@@ -352,10 +345,12 @@ namespace RealitySE.Tests
             client.Identify("u1");
             Assert.Equal(5, Sends(h).Count);
             Assert.NotNull(h.Storage.GetString(RavensightClient.IdentityKey));
-            client.Enabled = false;
+            // The player's opt-out (consent withdrawn). The game's own switch,
+            // Enabled = false, keeps it: a settled cross-SDK decision.
+            client.SetTrackingEnabled(false);
             Assert.Null(h.Storage.GetString(RavensightClient.IdentityKey));
             Assert.False(client.IsIdentified);
-            client.Enabled = true;
+            client.SetTrackingEnabled(true);
             await OpenSession(client);
             Assert.Equal(5, Sends(h).Count);
         }
@@ -454,7 +449,7 @@ namespace RealitySE.Tests
             config.Optional = true;
             RavensightClient client = h.Client(config);
             client.Identify("u1");
-            Refused(() => client.Identify("a@b"));
+            Refused(h, () => client.Identify("a@b"));
             client.ResetIdentity();
             client.Identify("u1");
             Assert.Empty(h.Transport.Requests);
@@ -515,6 +510,185 @@ namespace RealitySE.Tests
             await client.InitAsync();
             await OpenSession(client);
             Assert.Empty(Sends(h));
+        }
+
+        // --- cross-SDK review findings and settled decisions ---------------------------
+
+        [Fact]
+        public async Task TheGameSwitchKeepsTheIdentity()
+        {
+            var (h, _) = Setup();
+            RavensightClient client = await h.Started();
+            Assert.True(client.Identify("u1"));
+            Assert.Single(Sends(h));
+            client.Enabled = false;
+            Assert.NotNull(h.Storage.GetString(RavensightClient.IdentityKey));
+            Assert.True(client.IsIdentified);
+        }
+
+        [Fact]
+        public async Task TurningCollectionBackOnInAnOpenSessionSends()
+        {
+            var (h, _) = Setup();
+            RavensightClient client = await h.Started();
+            client.Enabled = false;
+            Assert.True(client.Identify("u1")); // held: the client may not save now
+            Assert.Empty(Sends(h));
+            Assert.Null(h.Storage.GetString(RavensightClient.IdentityKey));
+            client.Enabled = true;
+            Assert.Single(Sends(h));
+            Assert.Equal("S1", Sends(h)[0].Key);
+            Assert.NotNull(h.Storage.GetString(RavensightClient.IdentityKey));
+        }
+
+        [Fact]
+        public async Task BeforeTheSaltTheIdIsHeldAndHashedUnderTheSaltThatArrives()
+        {
+            var (h, server) = Setup();
+            RavensightClient first = await h.Started();
+            first.Identify("12345");
+            Assert.Single(Sends(h));
+            first.Dispose();
+
+            server.Salt = RavensightJson.GetString(SaltsDiffer, "salt_b", null);
+            RavensightClient client = h.Client();
+            client.Begin();
+            string device = client.DeviceId;
+            Assert.True(client.Identify("12345")); // the saved salt is not this launch's yet
+            await client.InitAsync();
+            Assert.Equal(2, Sends(h).Count);
+            Assert.Equal(RavensightJson.GetString(SaltsDiffer, "wire_b", null), Sends(h)[1].Value);
+            Assert.Equal(server.Salt, StoredSalt(h));
+            Assert.Equal(device, client.DeviceId); // the old one was deleted, not signed out
+        }
+
+        [Fact]
+        public async Task AnotherAccountBeforeTheSaltSignsTheSavedOneOutWhenItArrives()
+        {
+            var (h, _) = Setup();
+            RavensightClient first = await h.Started();
+            first.Identify("u1");
+            Assert.Single(Sends(h));
+            first.Dispose();
+
+            RavensightClient client = h.Client();
+            client.Begin();
+            string device = client.DeviceId;
+            Assert.True(client.Identify("u2"));
+            Assert.Equal(device, client.DeviceId); // nothing decided before the salt
+            await client.InitAsync(); // S2 answers the salt: u1 is signed out first
+            Assert.NotEqual(device, client.DeviceId);
+            Assert.Single(Sends(h));
+            await OpenSession(client); // a fresh session for the fresh device
+            Assert.Equal(2, Sends(h).Count);
+            Assert.Equal("S3", Sends(h)[1].Key);
+            Assert.Equal(ExpectedSend(Step(5, "identify(\"u2\")")), Sends(h)[1].Value);
+        }
+
+        [Fact]
+        public async Task TwoCallsBeforeTheSaltTheLastWins()
+        {
+            var (h, _) = Setup();
+            RavensightClient client = h.Client();
+            client.Begin();
+            string device = client.DeviceId;
+            client.Identify("u1");
+            client.Identify("u2");
+            await client.InitAsync();
+            Assert.Single(Sends(h));
+            Assert.Equal(ExpectedSend(Step(5, "identify(\"u2\")")), Sends(h)[0].Value);
+            Assert.Equal(device, client.DeviceId);
+        }
+
+        [Fact]
+        public async Task NeverOpensASessionUnderARetryAfterHold()
+        {
+            var (h, _) = Setup();
+            h.Transport.Routes["/session"] = r => FakeTransport.Json(429, "{\"error\":\"rate_limited\"}", "600");
+            RavensightClient client = await h.Started();
+            int sessions = h.Transport.To("/session").Count;
+            Assert.True(client.Identify("u1"));
+            await client.FlushAsync(false);
+            Assert.Equal(sessions, h.Transport.To("/session").Count);
+            Assert.Empty(h.Transport.To("/identify"));
+            Assert.True(client.RetryInMs > 0);
+        }
+
+        [Fact]
+        public async Task IsSentOnTheAnsweredTokenWhateverTheDeviceClockSays()
+        {
+            var (h, _) = Setup();
+            // expiresAt already past by this device's clock.
+            h.Transport.Routes["/session"] = r => FakeTransport.Json(201,
+                "{\"token\":\"S1\",\"expiresAt\":1000,\"identify\":{\"salt\":\"" + Salt + "\"}}");
+            RavensightClient client = h.Client();
+            client.Begin();
+            client.Identify("u1");
+            await client.InitAsync();
+            Assert.NotEmpty(Sends(h));
+            Assert.Equal("S1", Sends(h)[0].Key);
+        }
+
+        [Fact]
+        public async Task APlaytestRunKeepsItInMemoryAndSendsNothing()
+        {
+            var (h, _) = Setup();
+            RavensightConfig config = h.Config();
+            config.Playtest = new RavensightPlaytestContext("pt_token", "run1", null, null);
+            RavensightClient client = await h.Started(config);
+            Assert.True(client.Identify("u1"));
+            await OpenSession(client);
+            Assert.True(client.IsIdentified);
+            Assert.Empty(Sends(h));
+            Assert.Null(h.Storage.GetString(RavensightClient.IdentityKey));
+        }
+
+        [Fact]
+        public async Task FailuresLeaveTheStatusAlone()
+        {
+            var (h, server) = Setup();
+            server.IdentifyAnswer = r => FakeTransport.Json(503, "{\"error\":\"unavailable\"}");
+            RavensightClient client = await h.Started();
+            string before = client.StatusReason;
+            int statuses = h.Statuses.Count;
+            client.Identify("u1");
+            Assert.Single(Sends(h));
+            Assert.Equal(before, client.StatusReason);
+            Assert.Equal(statuses, h.Statuses.Count);
+        }
+
+        [Fact]
+        public async Task OptOutAndResetIdentityDeleteASavedIdentityBeforeConsent()
+        {
+            var (h, _) = Setup();
+            RavensightClient first = await h.Started();
+            first.Identify("u1");
+            Assert.NotNull(h.Storage.GetString(RavensightClient.IdentityKey));
+            first.Dispose();
+
+            // A later build asks for consent: nothing is kept before the yes.
+            RavensightConfig config = h.Config();
+            config.Consent = RavensightConsent.OptIn;
+            RavensightClient client = h.Client(config);
+            client.SetTrackingEnabled(false);
+            Assert.Null(h.Storage.GetString(RavensightClient.IdentityKey));
+            client.ResetIdentity();
+            Assert.Null(h.Storage.GetString(RavensightClient.IdentityKey));
+            Assert.Single(Sends(h));
+        }
+
+        [Fact]
+        public void WithoutAKeyOptOutAndResetDeleteAnIdentityOnDisk()
+        {
+            var (h, _) = Setup();
+            h.Storage.SetString(RavensightClient.IdentityKey, "{\"salt\":\"" + Salt + "\",\"accountHash\":\"" + new string('a', 64) + "\"}");
+            RavensightConfig config = h.Config();
+            config.IngestKey = null;
+            config.Optional = true;
+            RavensightClient client = h.Client(config);
+            client.ResetIdentity();
+            Assert.Null(h.Storage.GetString(RavensightClient.IdentityKey));
+            Assert.Empty(h.Transport.Requests);
         }
 
         // --- a late answer ------------------------------------------------------------

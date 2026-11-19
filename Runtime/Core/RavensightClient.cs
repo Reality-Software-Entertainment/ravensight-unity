@@ -612,10 +612,13 @@ namespace RealitySE
                 }
                 if (value == _enabled) return;
                 _enabled = value;
-                if (!value) { ClearConfig(true); ClearQueue(); ForgetIdentity(); }
+                // The game's own switch keeps the identity (the player's opt-out
+                // deletes it); back on, a held id settles and the open session
+                // is identified.
+                if (!value) { ClearConfig(true); ClearQueue(); }
                 SetStatus(null);
                 if (value) QueueGameStarted();
-                if (value) SettleIdentity();
+                if (value) { SettleIdentity(); ScheduleIdentify(); }
             }
         }
 
@@ -719,7 +722,7 @@ namespace RealitySE
             if (on) OpenQueue();
             SetStatus(null);
             if (on) QueueGameStarted();
-            if (on) SettleIdentity();
+            if (on) { SettleIdentity(); ScheduleIdentify(); }
         }
 
         /// <summary>
@@ -1614,7 +1617,12 @@ namespace RealitySE
                     ResetBackoff();
                     SetStatus(null);
                     ApplyErrorCaptureSettings(parsed);
-                    AdoptIdentifyAnswer(parsed);
+                    if (AdoptIdentifyAnswer(parsed))
+                    {
+                        // Another account signed in before the salt was known: the
+                        // saved one was signed out with this session.
+                        throw new RavensightException("session dropped after a sign-out", RavensightReason.SessionFailed, 0);
+                    }
                     Emit("session ready");
                     await FetchConfigAsync();
                     return token;

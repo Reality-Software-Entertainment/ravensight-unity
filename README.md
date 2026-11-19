@@ -676,8 +676,8 @@ Ravensight.ResetIdentity();        // on sign-out
   emails and names are never sent.
 * **Checked on the device:** the id must not be null or empty, must be at
   most 256 bytes of UTF-8 and must not contain `@`, so an email or a handle
-  is refused with an `ArgumentException` and nothing changes. It is used
-  exactly as given (never trimmed).
+  is refused: `Identify` returns false, logs one warning and changes nothing.
+  It is used exactly as given (never trimmed).
 * **Remembered:** only the hash and the salt, in `PlayerPrefs` under
   `ravensight_identity`, so the next launch identifies its session without
   another call. `Ravensight.IsIdentified` says whether one is set.
@@ -686,9 +686,11 @@ Ravensight.ResetIdentity();        // on sign-out
   device is not linked to the account. `ResetDeviceId()` alone keeps it.
 * **Signing in as another account** calls `ResetIdentity()` for you first.
 * **Consent:** without a key, or with Consent set to Opt In before the
-  player's yes, the id waits in memory and nothing is sent. Opting out, or
-  `SetEnabled(false)`, forgets it. You can call `Identify` before the
-  component wakes.
+  player's yes, the id waits in memory and nothing is sent. The player's
+  opt-out (`SetTrackingEnabled(false)`) forgets it; your own switch,
+  `SetEnabled(false)`, keeps it and identifies again when turned back on. A
+  playtest run keeps it in memory and sends nothing. You can call `Identify`
+  before the component wakes.
 * **Cost:** one event on your usage meter per identified session. The
   request never holds up your events.
 

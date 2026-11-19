@@ -80,42 +80,50 @@ namespace RealitySE
 
         /// <summary>
         /// Links this device to the game's own account id, so one person on two
-        /// devices, or before and after sign-in, counts as one player. Throws
-        /// ArgumentException (nothing changed) for null, an empty id, one over
-        /// 256 UTF-8 bytes, or one with an '@'. The id is used exactly as given.
-        /// Only its salted hash is saved and sent, once per session; the id
-        /// waits in memory until the session answer gives the salt, and before
-        /// consent. Signing in as another account calls ResetIdentity first.
+        /// devices, or before and after sign-in, counts as one player. Returns
+        /// false, with one warning, and changes nothing for null, an empty id,
+        /// one over 256 UTF-8 bytes, or one with an '@'. The id is used exactly
+        /// as given. Only its salted hash is saved and sent, once per session;
+        /// the id waits in memory until this launch's session answer gives the
+        /// salt, and before consent. Signing in as another account signs the
+        /// first one out (ResetIdentity) first.
         /// </summary>
-        public void Identify(string accountId)
+        public bool Identify(string accountId)
         {
             string refusal = IdentifyRefusal(accountId);
             if (refusal != null)
             {
-                throw new ArgumentException(
-                    "Ravensight: identify refused (" + refusal + "): an account id is 1 to 256 bytes of text with no @. Nothing changed.",
-                    "accountId");
+                WarnLine("Ravensight: identify refused (" + refusal + "): an account id is 1 to 256 bytes of text with no @. Nothing changed.");
+                return false;
             }
             if (_identifyNoSalt)
             {
                 // An older server: nothing is held, saved or sent this launch.
                 Emit("identify is not available from this server; the account id was not kept");
-                return;
+                return true;
+            }
+            if (_launchSalt == null)
+            {
+                // This launch's salt is not known yet, and a saved identity may
+                // be another game's: hold the id (the last call wins) and decide
+                // when the session answer brings the salt.
+                _heldAccount = accountId;
+                return true;
             }
             if (_identityHash != null)
             {
-                // The saved salt is the game's: compare the accounts with it.
-                if (IdentifyAccountHash(_identitySalt, accountId) == _identityHash)
+                if (IdentifyAccountHash(_launchSalt, accountId) == _identityHash)
                 {
                     _heldAccount = null;
                     ScheduleIdentify();
-                    return;
+                    return true;
                 }
                 // Another account on this device: sign the first one out.
                 ResetIdentityCore();
             }
             _heldAccount = accountId;
             SettleIdentity();
+            return true;
         }
 
         /// <summary>
@@ -126,7 +134,10 @@ namespace RealitySE
         /// </summary>
         public void ResetIdentity()
         {
-            if (_identityHash == null && _heldAccount == null) return;
+            // A saved identity this client never read (no key, or before
+            // consent) is signed out too.
+            bool onDisk = !IsPlaytest && _storage.GetString(IdentityKey) != null;
+            if (_identityHash == null && _heldAccount == null && !onDisk) return;
             ResetIdentityCore();
         }
 
@@ -156,7 +167,9 @@ namespace RealitySE
 
         private void DeleteSavedIdentity()
         {
-            if (_inert || IsPlaytest || _storage.GetString(IdentityKey) == null) return;
+            // Without a key nothing is ever saved, but an earlier build's identity
+            // is still deleted on the player's opt-out or a sign-out.
+            if (IsPlaytest || _storage.GetString(IdentityKey) == null) return;
             _storage.DeleteKey(IdentityKey);
             _storage.Save();
         }
@@ -190,10 +203,14 @@ namespace RealitySE
             ScheduleIdentify();
         }
 
-        /// <summary>A session answer: the game's salt, or none from an older server.</summary>
-        private void AdoptIdentifyAnswer(object parsed)
+        /// <summary>
+        /// A session answer: the game's salt, or none from an older server.
+        /// Returns true when another account was signed out, which also dropped
+        /// the session that just opened.
+        /// </summary>
+        private bool AdoptIdentifyAnswer(object parsed)
         {
-            if (_identifyNoSalt) return;
+            if (_identifyNoSalt) return false;
             object identify;
             Dictionary<string, object> answer = RavensightJson.AsObject(parsed);
             string salt = answer != null && answer.TryGetValue("identify", out identify)
@@ -208,7 +225,7 @@ namespace RealitySE
                     _heldAccount = null;
                     Emit("identify is not available from this server; the account id was dropped");
                 }
-                return;
+                return false;
             }
             _launchSalt = salt;
             if (_identityHash != null && _identitySalt != salt)
@@ -220,23 +237,43 @@ namespace RealitySE
                 _identifyGeneration++;
                 Emit("forgot an identity saved under another game's key");
             }
+            bool signedOut = false;
+            if (_heldAccount != null && _identityHash != null)
+            {
+                if (IdentifyAccountHash(salt, _heldAccount) == _identityHash)
+                {
+                    _heldAccount = null;
+                }
+                else
+                {
+                    // Another account was identified before the salt was known:
+                    // sign the saved one out first (fresh device and session).
+                    string waiting = _heldAccount;
+                    ResetIdentityCore();
+                    _heldAccount = waiting;
+                    signedOut = true;
+                }
+            }
             SettleIdentity();
             ScheduleIdentify();
+            return signedOut;
         }
 
         /// <summary>Starts the send without waiting for it, so it never holds up events.</summary>
         private void ScheduleIdentify()
         {
-            if (_inert || _identityHash == null) return;
+            if (_inert || IsPlaytest || _identityHash == null) return;
             Observe(SendIdentifyAsync());
         }
 
         /// <summary>One POST /identify for the current session. Each session is tried once, whatever the answer.</summary>
         private async Task SendIdentifyAsync()
         {
-            if (_identityHash == null || _identifyStopped || _identifyNoSalt || !IsActive) return;
-            if (!IsSessionValid() || _launchSalt != _identitySalt) return; // the next session answer asks again
+            if (_identityHash == null || _identifyStopped || _identifyNoSalt || IsPlaytest || !IsActive) return;
+            // The token the session answer returned, as held; no expiry check
+            // against this device's clock.
             string token = SessionToken;
+            if (string.IsNullOrEmpty(token) || _launchSalt != _identitySalt) return; // the next session answer asks again
             if (token == _identifyDoneToken) return;
             _identifyDoneToken = token;
             int generation = _identifyGeneration;

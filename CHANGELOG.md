@@ -9,13 +9,15 @@ server whose session answer carries `identify.salt` and that offers
 * `Ravensight.Identify(accountId)`, `Ravensight.ResetIdentity()` and
   `Ravensight.IsIdentified`, with the same members on `RavensightClient`.
   The id is checked on the device (not null or empty, at most 256 UTF-8
-  bytes, no `@`, never trimmed; an `ArgumentException` otherwise) and only
+  bytes, no `@`, never trimmed; `Identify` returns false with one warning
+  otherwise) and only
   its HMAC-SHA256 with the game's salt is sent, once per session, with the
   session token. The hash and salt are saved under `ravensight_identity`;
   the raw id is held in memory only until the salt is known.
 * A different salt deletes the saved identity, a session answer with no
   salt drops a held id for the launch, signing in as another account resets
-  first, and opt-out, consent withdrawn and `SetEnabled(false)` forget it.
+  first, and opt-out and consent withdrawn forget it. `SetEnabled(false)`
+  keeps it. A playtest run keeps it in memory and sends nothing.
 * The contract's binding vectors in `Tests/Editor/Core/identify-vectors.json`.
 
 ## [0.5.0] - 2026-11-06
