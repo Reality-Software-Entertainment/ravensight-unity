@@ -872,3 +872,7 @@ endpoint changes and consent revocation stop retries instead of rebinding them.
 Retry state is memory-only. Screenshot reports reserve 20,001 weighted events;
 text-only reports use 1. Unfinished reservations expire server-side. No screenshot
 is captured automatically and no image-analysis claim is implied.
+
+## Contributing
+
+Install the local checks once per clone: `git config core.hooksPath .githooks`. The pre-push hook then runs this repository's tests before every push, with a time limit, and refuses the push if they fail. CI runs nightly and on demand, not on pushes or pull requests, so this hook is where a change is checked first.
