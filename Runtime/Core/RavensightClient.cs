@@ -176,6 +176,13 @@ namespace RealitySE
         /// backup to opt out of; the Unity layer sets it on iOS.
         /// </summary>
         public Func<string, bool> ExcludeFromBackup;
+        /// <summary>
+        /// A web build's landing query string (the page's location.search),
+        /// which the Unity layer reads once in a WebGL player; null everywhere
+        /// else. Only its first rs_link is used: a Ravensight campaign link id,
+        /// sent once with the first session. See <see cref="RavensightClient.SetCampaignLink"/>.
+        /// </summary>
+        public string LandingSearch;
         /// <summary>Device fields sent on POST /session. Each is cleaned to at most 128 printable characters.</summary>
         public string DeviceModel;
         public string DeviceOsVersion;
@@ -223,7 +230,7 @@ namespace RealitySE
     /// </summary>
     public sealed partial class RavensightClient
     {
-        public const string SdkVersion = "0.5.0";
+        public const string SdkVersion = "0.6.0";
         /// <summary>The bare host. "/api/v1" is appended by <see cref="NormalizeApiUrl"/>.</summary>
         public const string DefaultApiUrl = "https://api.ravensight.io";
         /// <summary>Server hard limit on POST /track/batch.</summary>
@@ -348,6 +355,9 @@ namespace RealitySE
             _joinToken = string.IsNullOrEmpty(config.JoinToken) || config.JoinToken.Trim().Length == 0
                 ? null
                 : config.JoinToken.Trim();
+            // The campaign link this web page was reached by, if any. Read once,
+            // here; the page address is left as it is and nothing is saved.
+            _campaignLink = CampaignLinkFromSearch(config.LandingSearch);
 
             if (string.IsNullOrEmpty(config.IngestKey) || config.IngestKey.Trim().Length == 0)
             {
@@ -403,6 +413,9 @@ namespace RealitySE
                     _storage.DeleteKey(BackgroundMarkerKey);
                     _storage.Save();
                 }
+                // Opted out (or not yet opted in): no identity is kept.
+                if (_optedOut) DeleteSavedIdentity();
+                else LoadIdentity();
             }
 
             _status = EffectiveStatus(null);
@@ -609,9 +622,13 @@ namespace RealitySE
                 }
                 if (value == _enabled) return;
                 _enabled = value;
+                // The game's own switch keeps the identity (the player's opt-out
+                // deletes it); back on, a held id settles and the open session
+                // is identified.
                 if (!value) { ClearConfig(true); ClearQueue(); }
                 SetStatus(null);
                 if (value) QueueGameStarted();
+                if (value) { SettleIdentity(); ScheduleIdentify(); }
             }
         }
 
@@ -695,6 +712,8 @@ namespace RealitySE
             // Saved even while inert or switched off, so a settings toggle
             // always shows the player's real choice.
             WriteTrackingChoice(_storage, on, _config.Consent);
+            // Opt-out or consent withdrawn: the identity and a held id go.
+            if (!on) ForgetIdentity();
             if (_inert) return;
             if (_optedOut == !on) return;
             _optedOut = !on;
@@ -713,6 +732,7 @@ namespace RealitySE
             if (on) OpenQueue();
             SetStatus(null);
             if (on) QueueGameStarted();
+            if (on) { SettleIdentity(); ScheduleIdentify(); }
         }
 
         /// <summary>
@@ -1577,6 +1597,10 @@ namespace RealitySE
                 if (_distribution != null) body["distribution"] = _distribution;
                 Dictionary<string, object> device = DeviceFields();
                 if (device != null) body["device"] = device;
+                // The player's own session only, never a playtest run or a
+                // joined session, and once: only a 201 with a token clears it.
+                string campaignLink = CampaignLinkForSession(joinToken);
+                if (campaignLink != null) body["campaignLink"] = campaignLink;
 
                 RavensightResponse response = await Send(
                     WithPlaytest(new RavensightRequest("POST", ApiUrl + "/session", RavensightJson.Write(body))
@@ -1590,6 +1614,8 @@ namespace RealitySE
                 {
                     lock (_gate)
                     {
+                        // The server has the link now, whatever happens to this session.
+                        CampaignLinkDelivered(campaignLink);
                         if (generation != _sessionGeneration || _disposed)
                         {
                             // Reset or disposed while this was in flight: the
@@ -1607,6 +1633,12 @@ namespace RealitySE
                     ResetBackoff();
                     SetStatus(null);
                     ApplyErrorCaptureSettings(parsed);
+                    if (AdoptIdentifyAnswer(parsed))
+                    {
+                        // Another account signed in before the salt was known: the
+                        // saved one was signed out with this session.
+                        throw new RavensightException("session dropped after a sign-out", RavensightReason.SessionFailed, 0);
+                    }
                     Emit("session ready");
                     await FetchConfigAsync();
                     return token;

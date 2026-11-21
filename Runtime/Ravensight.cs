@@ -115,6 +115,16 @@ namespace RealitySE
         private static readonly object PendingGate = new object();
         private static readonly List<PendingEvent> PendingEvents = new List<PendingEvent>();
         private static bool? _pendingEnabled;
+        // An Identify made before the component woke: memory only, handed to
+        // the client when it starts.
+        private static string _pendingIdentify;
+        // A SetCampaignLink made before the component woke: memory only,
+        // handed to the client when it starts.
+        private static string _pendingCampaignLink;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // The page's rs_link is read once per page load, by the first client.
+        private static bool _landingSearchRead;
+#endif
         private static RavensightPlaytestContext _explicitPlaytest;
 
         // Seams for the package's Play Mode tests (InternalsVisibleTo), so a
@@ -247,6 +257,11 @@ namespace RealitySE
             ConfigReady = null;
             LastInitResult = null;
             _pendingEnabled = null;
+            _pendingIdentify = null;
+            _pendingCampaignLink = null;
+#if UNITY_WEBGL && !UNITY_EDITOR
+            _landingSearchRead = false;
+#endif
             _explicitPlaytest = null;
             lock (PendingGate) { PendingEvents.Clear(); }
         }
@@ -375,6 +390,7 @@ namespace RealitySE
             config.Performance = performance;
             config.ErrorCapture = errorCapture;
             config.Playtest = ResolvePlaytest();
+            config.LandingSearch = ReadLandingSearchOnce();
             config.Storage = StorageForTests ?? new RavensightPlayerPrefsStorage();
             config.QueueDirectory = persistQueue ? QueueDirectoryForTests ?? DefaultQueueDirectory() : null;
 #if UNITY_IOS && !UNITY_EDITOR
@@ -400,6 +416,8 @@ namespace RealitySE
             {
                 Debug.LogWarning("Ravensight: could not start (" + e.Message + "). Tracking is off.");
                 ClearPendingEvents();
+                _pendingIdentify = null;
+                _pendingCampaignLink = null;
                 return;
             }
 
@@ -423,6 +441,8 @@ namespace RealitySE
             _bootMs = Time.realtimeSinceStartup * 1000.0;
             _client.Begin();
             ReplayPendingEvents();
+            ApplyPendingIdentify();
+            ApplyPendingCampaignLink();
 
             // With a key and consent the hooks go in now, so errors during
             // boot are held (at most 5) until the settings or session answer
@@ -450,6 +470,36 @@ namespace RealitySE
         [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.I1)]
         private static extern bool RavensightExcludeFromBackup(string path);
 #endif
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        /// <summary>Plugins/WebGL/RavensightLandingSearch.jslib: the page's window.location.search, read only.</summary>
+        [System.Runtime.InteropServices.DllImport("__Internal")]
+        private static extern string RavensightLandingSearch();
+#endif
+
+        /// <summary>
+        /// A WebGL player's landing query string, for the campaign link: read
+        /// once per page load, by the first client. Null on every other
+        /// platform and in the Editor. The page address is never changed.
+        /// </summary>
+        private static string ReadLandingSearchOnce()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            if (_landingSearchRead) return null;
+            _landingSearchRead = true;
+            try
+            {
+                return RavensightLandingSearch();
+            }
+            catch (Exception)
+            {
+                // No page to read: no campaign link.
+                return null;
+            }
+#else
+            return null;
+#endif
+        }
 
         private static string SafeSystemInfo(Func<string> read)
         {
@@ -479,6 +529,9 @@ namespace RealitySE
             _client.Warn = message => Debug.LogWarning(message);
             _client.ReportStartupProblems();
             ClearPendingEvents();
+            // Held in memory only: an inert client never saves or sends them.
+            ApplyPendingIdentify();
+            ApplyPendingCampaignLink();
             RavensightInitResult result = new RavensightInitResult();
             result.Reason = RavensightReason.NoKey;
             LastInitResult = result;
@@ -935,6 +988,111 @@ namespace RealitySE
             }
             ClearPendingEvents();
             return RavensightClient.ResetStoredDeviceId(new RavensightPlayerPrefsStorage());
+        }
+
+        // --- Identify players who sign in ----------------------------------------
+
+        /// <summary>
+        /// Links this device to your game's own account id after the player
+        /// signs in, so one person on two devices, or before and after sign-in,
+        /// counts as one player. Only a salted hash of the id is sent, once per
+        /// session with the session token; the raw id is never sent or saved.
+        /// Returns false, with one warning, and changes nothing for null, an
+        /// empty id, one over 256 UTF-8 bytes, or one containing '@' (emails and
+        /// handles). Signing in as another account calls <see cref="ResetIdentity"/>
+        /// first. Callable before the component wakes; it applies when it does.
+        /// </summary>
+        public static bool Identify(string accountId)
+        {
+            RavensightClient client = Client;
+            if (client != null) return client.Identify(accountId);
+            string refusal = RavensightClient.IdentifyRefusal(accountId);
+            if (refusal != null)
+            {
+                Debug.LogWarning("Ravensight: identify refused (" + refusal + "): an account id is 1 to 256 bytes of text with no @. Nothing changed.");
+                return false;
+            }
+            _pendingIdentify = accountId;
+            return true;
+        }
+
+        /// <summary>
+        /// For sign-out: forgets the saved identity and switches to a fresh
+        /// device id, exactly like <see cref="ResetDeviceId"/>, so the next
+        /// player on this device is not linked to the account. Sends nothing.
+        /// With no identity saved it does nothing.
+        /// </summary>
+        public static void ResetIdentity()
+        {
+            RavensightClient client = Client;
+            if (client != null)
+            {
+                client.ResetIdentity();
+                return;
+            }
+            bool held = _pendingIdentify != null;
+            _pendingIdentify = null;
+            if (IsPlaytest) return;
+            RavensightPlayerPrefsStorage storage = new RavensightPlayerPrefsStorage();
+            bool saved = storage.GetString(RavensightClient.IdentityKey) != null;
+            if (!saved && !held) return;
+            if (saved)
+            {
+                storage.DeleteKey(RavensightClient.IdentityKey);
+                storage.Save();
+            }
+            ResetDeviceId();
+        }
+
+        /// <summary>
+        /// True while an identity is saved, or an Identify waits for the session.
+        /// The account id itself can never be read back.
+        /// </summary>
+        public static bool IsIdentified
+        {
+            get
+            {
+                RavensightClient client = Client;
+                return client != null ? client.IsIdentified : _pendingIdentify != null;
+            }
+        }
+
+        private void ApplyPendingIdentify()
+        {
+            string accountId = _pendingIdentify;
+            _pendingIdentify = null;
+            if (accountId != null && _client != null) _client.Identify(accountId);
+        }
+
+        // --- Campaign links ------------------------------------------------------------
+
+        /// <summary>
+        /// Sends a Ravensight campaign link id with the next session the SDK
+        /// opens, so the Campaign links page counts this player and session for
+        /// that link. A WebGL build reads rs_link from the page address by
+        /// itself; on other platforms call this from your deep link, universal
+        /// link, App Link or install referrer handler with the rs_link value of
+        /// the incoming address (<see cref="RavensightClient.CampaignLinkFromSearch"/>
+        /// reads it from a query string). Returns true when the id is 24 hex
+        /// characters (any case) and is now pending, replacing any earlier one;
+        /// false, changing nothing, otherwise. Never saved, never sent without
+        /// a key or the player's consent. Callable before the component wakes.
+        /// </summary>
+        public static bool SetCampaignLink(string id)
+        {
+            RavensightClient client = Client;
+            if (client != null) return client.SetCampaignLink(id);
+            string valid = RavensightClient.ValidCampaignLink(id);
+            if (valid == null) return false;
+            _pendingCampaignLink = valid;
+            return true;
+        }
+
+        private void ApplyPendingCampaignLink()
+        {
+            string id = _pendingCampaignLink;
+            _pendingCampaignLink = null;
+            if (id != null && _client != null) _client.SetCampaignLink(id);
         }
 
         // --- Helpers ----------------------------------------------------------

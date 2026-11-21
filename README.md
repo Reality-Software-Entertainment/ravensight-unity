@@ -88,7 +88,7 @@ Or add it to `Packages/manifest.json` yourself:
 }
 ```
 
-To pin a version, append a release tag such as `#v0.5.0` to the URL once that
+To pin a version, append a release tag such as `#v0.6.0` to the URL once that
 tag exists.
 
 **Upgrading from a copied 0.2.0.** If you followed the 0.2.0 workaround and
@@ -193,6 +193,7 @@ Everything game code needs is static on `Ravensight`:
 | `Ravensight.TrackResource(flow, resource, amount, ...)` | A resource gained (`source`) or spent (`sink`). |
 | `Ravensight.TrackProgression(status, p1, p2, p3, score, ...)` | A progression step: `start`, `complete` or `fail`. |
 | `Ravensight.TrackError(severity, message, stack, ...)` | An error, with a severity from `debug` to `critical`. |
+| `Ravensight.SetCampaignLink(id)` | Sends a campaign link id with the next session, from a deep link or App Link. WebGL reads it from the page by itself. See [Campaign links](#campaign-links). |
 | `Ravensight.SetErrorCapture(bool)` | The game's runtime switch for automatic error capture, not saved. |
 | `Ravensight.IsErrorCaptureActive` | True while automatic error capture runs. |
 | `Ravensight.Client` | The underlying `RavensightClient` for anything else. |
@@ -475,6 +476,69 @@ beside the device id, makes later calls return false across restarts. Pass
 `Ravensight.DeviceId` to an attribution partner as its customer user id before
 the partner starts, so its install callback names this device.
 
+## Campaign links
+
+A Ravensight campaign link counts the players and sessions it brought on the
+Campaign links page, and you can open those players in Player insights. The
+SDK sends the link's id once, as `campaignLink` on the first `POST /session`
+it opens: the same request, nothing else added.
+
+**WebGL: nothing to call.** A campaign link that points at your web build adds
+`rs_link=<link id>` to the page address. The SDK reads it from the page's
+query string once, when the component wakes (through the package's
+`Plugins/WebGL` file), and leaves the address exactly as it is.
+
+**Every other platform: pass it on.** The link's redirect adds
+`rs_link=<link id>` to your own https page, so a universal link or App Link
+that opens the game carries it. Hand it to the SDK from the handler you
+already have:
+
+```csharp
+using System;
+using RealitySE;
+using UnityEngine;
+
+public class CampaignLinkHandler : MonoBehaviour
+{
+    void Awake()
+    {
+        Application.deepLinkActivated += OnDeepLink;
+#if !UNITY_WEBGL // WebGL: the SDK reads the page address itself
+        // Opened through a link: the address is already here.
+        if (!string.IsNullOrEmpty(Application.absoluteURL)) OnDeepLink(Application.absoluteURL);
+#endif
+    }
+
+    void OnDeepLink(string url)
+    {
+        Uri uri;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return;
+        string linkId = RavensightClient.CampaignLinkFromSearch(uri.Query);
+        if (linkId != null) Ravensight.SetCampaignLink(linkId);
+        // ...then your own deep link handling.
+    }
+}
+```
+
+An install referrer you already read is a query string too:
+`RavensightClient.CampaignLinkFromSearch(referrer)` finds its `rs_link`.
+
+* **`SetCampaignLink(id)`** returns true when `id` is 24 hex characters (any
+  case; it is sent lower case) and is now waiting for a session, replacing
+  any earlier one. Anything else returns false and changes nothing. You can
+  call it before the component wakes. Best called before the first session;
+  a later call goes with the next session the SDK opens.
+* **Once:** only a session the server opens clears it. A failed or offline
+  attempt keeps it for the next one, and later sessions (a return after 30
+  minutes in the background, for example) carry none unless you set one again.
+* **Consent:** without a key nothing is sent. With Consent set to Opt In it
+  waits and goes with the first session after the player's yes; an opted
+  out player sends nothing. A playtest run and a game server's joined
+  session never send it.
+* **Nothing stored:** the id is held in memory only, never in `PlayerPrefs`
+  or the queue file. It is an id your studio made, not personal data. The
+  server keeps it only when it names a link of the same game.
+
 ## Levels and deaths
 
 The dashboard's level funnel, per-level deaths and journeys read your event
@@ -610,6 +674,10 @@ Besides the events you send, the SDK sends:
   Each is at most 128 printable characters. The server derives the country
   itself; the SDK never sends one.
 * **Attribution**, once per install, only when the game calls `SetAttribution`.
+* **Campaign link**, once, on the first `POST /session` after one is known:
+  in WebGL the `rs_link` value of the page address when it is a link id, and
+  nothing else from the address; elsewhere only what the game passes to
+  `SetCampaignLink`. See [Campaign links](#campaign-links).
 * If you switch Performance on, one `health` event per session carries frame
   rate, memory and boot time.
 
@@ -659,6 +727,50 @@ A game that sends gameplay events and nothing else can declare Device ID and
 Product Interaction as not linked to the player and not used for tracking,
 and needs no tracking permission prompt. The row by row answers for the App
 Store and Google Play forms are at https://ravensight.io/docs/#privacy-label.
+
+## Identify players who sign in
+
+If your game has its own accounts, tell Ravensight who signed in, so one
+person on two devices, or before and after sign-in, counts as one player:
+
+```csharp
+Ravensight.Identify(account.AnalyticsId);   // after your own sign-in succeeds: a random id stored with the account
+Ravensight.ResetIdentity();                 // on sign-out
+```
+
+* **Pass a random, high-entropy id**, such as a random UUID
+  (`Guid.NewGuid().ToString()`) or a random analytics id you make once for
+  each account and store with it, never a sequential database key, an email,
+  a name or a handle. Your game's salt reaches every copy of the game, so
+  anyone could hash 1, 2, 3 and onward and match a guessable id; a random one
+  cannot be guessed. The hash is still a pseudonymous identifier for the
+  player: declare it in your game's privacy notice.
+* **What is sent:** a salted hash of the account id (HMAC-SHA256 with your
+  game's own salt, which the session answer gives the SDK) and the session
+  token, once per session. The raw account id is never sent and never saved;
+  emails and names are never sent.
+* **Checked on the device:** the id must not be null or empty, must be at
+  most 256 bytes of UTF-8 and must not contain `@`, so an email or a handle
+  is refused: `Identify` returns false, logs one warning and changes nothing.
+  It is used exactly as given (never trimmed).
+* **Remembered:** only the hash and the salt, in `PlayerPrefs` under
+  `ravensight_identity`, so the next launch identifies its session without
+  another call. `Ravensight.IsIdentified` says whether one is set.
+* **`ResetIdentity()`** on sign-out forgets it and switches to a fresh
+  device id, exactly like `ResetDeviceId()`, so the next player on this
+  device is not linked to the account. `ResetDeviceId()` alone keeps it.
+* **Signing in as another account** calls `ResetIdentity()` for you first.
+* **Consent:** without a key, or with Consent set to Opt In before the
+  player's yes, the id waits in memory and nothing is sent. The player's
+  opt-out (`SetTrackingEnabled(false)`) forgets it; your own switch,
+  `SetEnabled(false)`, keeps it and identifies again when turned back on. A
+  playtest run keeps it in memory and sends nothing. You can call `Identify`
+  before the component wakes.
+* **Cost:** one event on your usage meter per identified session. The
+  request never holds up your events.
+
+A game that calls `Identify` links its data to the player's account: answer
+the store privacy forms that way.
 
 ## Telling players
 
@@ -751,6 +863,10 @@ WebGL builds should work, with two caveats (not yet verified in a browser):
   Performance `health` event, which is sent on quit and may never be sent in
   WebGL.
 
+A WebGL build reads a campaign link's `rs_link` from the page address by
+itself, through `Runtime/Plugins/WebGL/RavensightLandingSearch.jslib`. See
+[Campaign links](#campaign-links).
+
 ## Architecture
 
 ```
@@ -758,6 +874,7 @@ Runtime/
   Core/                           no UnityEngine dependency, enforced by asmdef
     RavensightClient.cs           sessions, batching, backoff, opt-out, lifecycle
     RavensightPlaytest.cs         where a playtest run's token and run id come from
+    RavensightCampaignLink.cs     the campaign link: rs_link parsing, the setter, once per session
     RavensightStorage.cs          IRavensightStorage plus an in memory version
     RavensightTransport.cs        IRavensightTransport plus request and response
     RavensightJson.cs             small JSON reader and writer
