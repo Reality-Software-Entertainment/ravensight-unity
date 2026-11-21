@@ -71,3 +71,17 @@ Screenshot Player Reports: 119 .NET core tests passed. All Runtime C# sources, i
   a throwing `location`. It has not run in a WebGL player or a browser.
 - Not run in the Unity Editor or its Test Runner, and not on a device. The new
   `.meta` files were written by hand with fresh GUIDs, not by the Editor.
+
+### Release (November 21, 2026)
+
+- Identify and campaign links together on main at 3d22245.
+- `Tools/compile-check.sh`: Runtime/Core compiles as C# 7.3 for
+  netstandard2.0. `Tools/test.sh`: **301 passed**, 0 failed.
+- All Runtime sources, the MonoBehaviour layer and the WebGL import
+  included, compile against the Unity 6000.6.5f1 Editor engine assemblies
+  (with and without `UNITY_EDITOR`) and against its WebGL player assemblies
+  with `UNITY_WEBGL`: 0 errors.
+- The seven new `.meta` files carry well formed GUIDs that no other file in
+  the package uses.
+- Not run in the Unity Editor or its Test Runner, and not on a device. No
+  live Ravensight service was used.
